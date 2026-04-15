@@ -1,0 +1,66 @@
+{
+  "hosting_providers": [
+    "aws",
+    "amazon",
+    "google cloud",
+    "azure",
+    "digitalocean",
+    "ovh",
+    "linode",
+    "vultr",
+    "hetzner",
+    "contabo",
+    "scaleway",
+    "ibm cloud",
+    "oracle cloud",
+    "alibaba cloud",
+    "cloudflare",
+    "rackspace"
+  ],
+  "vpn_keywords": [
+    "vpn",
+    "proxy",
+    "tunnel",
+    "anonymous",
+    "hide",
+    "private",
+    "nordvpn",
+    "expressvpn",
+    "surfshark",
+    "cyberghost",
+    "protonvpn",
+    "mullvad"
+  ],
+  "high_risk_countries": [
+    "Unknown",
+    "N/A"
+  ],
+  "suspicious_isp_patterns": [
+    "unknown",
+    "none",
+    "n/a",
+    "unavailable"
+  ],
+  "unusual_connection_types": [
+    "dialup",
+    "satellite"
+  ],
+  "risk_points": {
+    "hosting_provider": 15,
+    "vpn_proxy_isp": 30,
+    "vpn_proxy_connection": 25,
+    "unknown_location": 10,
+    "unknown_isp": 5,
+    "unusual_connection": 5
+  },
+  "weighting": {
+    "custom_score_weight": 0.4,
+    "api_score_weight": 0.6
+  },
+  "severity_thresholds": {
+    "low_max": 39,
+    "medium_max": 69,
+    "high_min": 70
+  },
+  "api_score_cap": 70
+}
