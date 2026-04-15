@@ -73,6 +73,10 @@ class ScanResult(db.Model):
     result = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
+
+with app.app_context():
+    db.create_all()
+
 # Routes
 @app.route('/')
 def home():
