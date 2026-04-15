@@ -12,7 +12,9 @@ import type {
   EmailAnalyzerAdvancedResult,
 } from '../types'
 
-const BASE = '/api'
+// Use environment variable for API base URL, fall back to relative path
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+const BASE = API_BASE_URL ? `${API_BASE_URL}/api` : '/api'
 
 async function post<T>(path: string, body: Record<string, string>): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {

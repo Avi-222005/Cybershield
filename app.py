@@ -55,7 +55,10 @@ from ip_analyzer import analyze_ip_hybrid
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:5173', 'http://127.0.0.1:5173'])
+
+# CORS: Read allowed origins from env, fall back to localhost for development
+allowed_origins = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',')
+CORS(app, origins=[origin.strip() for origin in allowed_origins])
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///cybershield.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
