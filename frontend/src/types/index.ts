@@ -3,6 +3,29 @@ export interface VendorEntry {
   result: string
 }
 
+export interface AnalysisFeatures {
+  url_length: number
+  uses_ip: boolean
+  subdomain_count: number
+  special_chars?: { is_suspicious: boolean }
+  suspicious_keywords_found: number
+  suspicious_keywords_list?: string[]
+  https_in_domain: boolean
+  uses_https: boolean
+  is_http_only: boolean
+  is_url_shortener: boolean
+  high_risk_tld: boolean
+  tld_name?: string
+  dot_count: number
+  excessive_dots: boolean
+  brand_spoofing: boolean
+  brands_found?: string[]
+  has_punycode: boolean
+  path_depth: number
+  path_depth_suspicious: boolean
+  [key: string]: any
+}
+
 export interface PhishingResult {
   verdict: string
   final_score: number
@@ -17,7 +40,7 @@ export interface PhishingResult {
   custom_score: number
   api_score: number
   detection_reasons: string[]
-  analysis_features: Record<string, unknown>
+  analysis_features: AnalysisFeatures
   domain_info: {
     registrar: string
     creation_date: string
