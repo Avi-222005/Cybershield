@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+from jinja2 import TemplateNotFound
 import os
 from dotenv import load_dotenv
 import requests
@@ -72,27 +73,47 @@ class ScanResult(db.Model):
 # Routes
 @app.route('/')
 def home():
-    return render_template('index.html')
+    return jsonify({
+        'service': 'CyberShield API',
+        'status': 'ok',
+        'message': 'Backend is running. Use /api/* endpoints for analysis.'
+    }), 200
+
+
+def _safe_render_template(template_name: str, fallback_route: str):
+    try:
+        return render_template(template_name)
+    except TemplateNotFound:
+        return jsonify({
+            'error': f'Template not found: {template_name}',
+            'message': 'This deployment is configured as API-only. Use frontend app for UI pages.',
+            'frontend_route': fallback_route
+        }), 404
+
+
+@app.route('/healthz')
+def healthz():
+    return jsonify({'status': 'ok'}), 200
 
 @app.route('/phishing-checker')
 def phishing_checker():
-    return render_template('phishing_checker.html')
+    return _safe_render_template('phishing_checker.html', '/phishing-checker')
 
 @app.route('/ip-checker')
 def ip_checker():
-    return render_template('ip_checker.html')
+    return _safe_render_template('ip_checker.html', '/ip-checker')
 
 @app.route('/about')
 def about():
-    return render_template('about.html')
+    return _safe_render_template('about.html', '/about')
 
 @app.route('/ssl-checker')
 def ssl_checker():
-    return render_template('ssl_checker.html')
+    return _safe_render_template('ssl_checker.html', '/ssl-checker')
 
 @app.route('/whois-lookup')
 def whois_lookup():
-    return render_template('whois_lookup.html')
+    return _safe_render_template('whois_lookup.html', '/whois-lookup')
 
 @app.route('/api/check-url', methods=['POST'])
 def check_url():
