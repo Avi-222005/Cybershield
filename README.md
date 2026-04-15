@@ -1,221 +1,184 @@
-# CyberShield - Advanced Cybersecurity Analysis Platform
+# CyberShield - Cybersecurity Analysis Platform
 
-🛡️ A comprehensive cybersecurity analysis platform with **Hybrid Phishing Detection** system that combines custom URL analysis with threat intelligence APIs.
+CyberShield is a full-stack cybersecurity toolkit with a Flask API backend and a React + Vite frontend. It combines hybrid threat scoring with practical recon and forensics utilities for URLs, IPs, domains, HTTP headers, email headers, and web stack fingerprinting.
 
-## 🌟 Key Features
+## Current Features
 
-### 🎯 **NEW: Hybrid Phishing Detection System**
-- ✅ **Custom URL Analysis** (65% weight) - 12+ security feature detection
-- ✅ **Threat Intelligence Integration** (35% weight) - VirusTotal API
-- ✅ **Explainable AI** - Clear detection reasons for every verdict
-- ✅ **Risk Scoring** - 0-100 score with severity classification
-- ✅ **Zero-Day Detection** - Works even without API data
+### Hybrid Threat Detection
+- Hybrid URL phishing detection with weighted scoring:
+  - Custom URL risk analysis (65%)
+  - Threat intelligence checks (35%)
+  - URLhaus hit escalation for known malicious infrastructure
+- Hybrid IP reputation analysis with weighted scoring:
+  - Custom IP risk indicators (40%)
+  - Threat intelligence score (60%)
+- Explainable output:
+  - Final verdict (SAFE, SUSPICIOUS, MALICIOUS)
+  - Risk score (0-100)
+  - Severity and security recommendations
+  - Detection reasons and score breakdown
 
-### 🔧 Additional Security Tools
-- 🔍 URL Phishing Detection
-- 🌍 IP Reputation Analysis
-- 📍 IP Geolocation Tracking
-- 🔒 SSL Certificate Checker
-- 📊 WHOIS Lookup
-- 📱 Mobile-Friendly Interface
+### Recon and Domain Security Tools
+- SSL certificate checker
+- WHOIS lookup
+- DNS lookup (A, AAAA, CNAME, MX, NS, TXT, SOA, CAA, DMARC, SPF)
+- Subdomain finder (common wordlist scan)
+- Port scanner (common ports)
+- Service detection with basic banner grab
+- HTTP security header analyzer
+- Technology stack analyzer (headers, assets, script fingerprints)
 
-## 🚀 Quick Start
+### Email Forensics
+- Basic email header analyzer
+- Advanced email header analyzer with:
+  - SPF, DKIM, DMARC parsing
+  - spoofing checks
+  - received-route IP extraction
+  - per-hop reputation checks
+  - risk scoring and phishing indicators
+  - time-delay anomaly signals
 
-### Prerequisites
-- Python 3.8 or higher
-- API keys (optional for full functionality):
-  - VirusTotal API key
-  - WhoisXML API key
+### Reporting
+- IP report PDF endpoint (WeasyPrint based, optional)
+- WHOIS report PDF endpoint (WeasyPrint based, optional)
+- Email threat analysis PDF endpoint (ReportLab based)
 
-### Installation
+### Frontend Experience
+- React + TypeScript single-page application
+- Dedicated pages for each analyzer tool
+- Animated UI with route transitions
+- API integration layer with typed result models
 
-1. **Clone the repository**:
-```bash
-git clone https://github.com/yourusername/cybershield.git
-cd cybershield
+## Tech Stack
+
+### Backend
+- Python
+- Flask
+- Flask-CORS
+- Flask-SQLAlchemy
+- requests
+- python-dotenv
+- python-whois
+- dnspython
+
+### Frontend
+- React 18 + TypeScript
+- Vite
+- Tailwind CSS
+- Framer Motion
+- React Router
+
+## Project Structure
+
+```text
+CyberShield/
+|- app.py                     # Flask app and API routes
+|- phishing_detector.py       # Hybrid URL phishing logic
+|- ip_analyzer.py             # Hybrid IP analysis logic
+|- services/                  # Domain, recon, intel, email, tech stack services
+|- frontend/                  # React + Vite frontend
+|- templates/                 # Server-side templates (legacy/PDF)
+|- static/                    # Static assets
+|- config/                    # Config files
+|- requirements.txt           # Python dependencies
+|- vercel.json                # Deployment config
 ```
 
-2. **Create virtual environment**:
+## API Endpoints
+
+### Core Threat Endpoints
+- POST /api/check-url
+- POST /api/check-ip
+
+### Domain and Recon Endpoints
+- POST /api/check-ssl
+- POST /api/whois-lookup
+- POST /api/dns-lookup
+- POST /api/subdomain-scan
+- POST /api/port-scan
+- POST /api/service-detect
+- POST /api/header-analysis
+- POST /api/tech-stack
+
+### Email Forensics Endpoints
+- POST /api/email-analyzer
+- POST /api/email-analyzer-advanced
+
+### PDF Export Endpoints
+- POST /api/download-ip-pdf
+- POST /api/download-whois-pdf
+- POST /api/download-email-analysis-pdf
+
+## Setup
+
+### 1. Clone Repository
+
+```bash
+git clone <your-repo-url>
+cd CyberShield
+```
+
+### 2. Backend Setup
+
 ```bash
 python -m venv .venv
-# Windows:
+# Windows
 .venv\Scripts\activate
-# Linux/Mac:
+# Linux/macOS
 source .venv/bin/activate
-```
 
-3. **Install dependencies**:
-```bash
 pip install -r requirements.txt
 ```
 
-4. **Configure API keys** (create `.env` file):
-```
+Create a root .env file:
+
+```env
+FLASK_SECRET_KEY=your_secret_key
 VIRUSTOTAL_API_KEY=your_virustotal_api_key
 WHOISXML_API_KEY=your_whoisxml_api_key
-FLASK_SECRET_KEY=your_secret_key_here
+URLHAUS_AUTH_KEY=your_urlhaus_auth_key
 ```
 
-### Running the Application
+Optional/extra PDF packages:
 
-1. **Start the server**:
+```bash
+pip install reportlab weasyprint
+```
+
+### 3. Frontend Setup
+
+```bash
+cd frontend
+npm install
+```
+
+Create frontend/.env from frontend/.env.example:
+
+```env
+VITE_SUPABASE_URL=your_supabase_project_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+### 4. Run the Project
+
+Backend:
+
 ```bash
 python app.py
 ```
 
-2. **Access the application**:
-   - Open browser: http://127.0.0.1:5000
-   - The app runs in debug mode by default
-
-3. **Run tests**:
-```bash
-python test_phishing_detector.py
-```
-
-## 📊 Hybrid Phishing Detection
-
-### How It Works
-
-```
-User URL → Custom Analysis (65%) + API Check (35%) → Weighted Score → Verdict
-```
-
-**Custom Analysis** extracts 12+ features:
-- IP address usage
-- Brand spoofing detection
-- Suspicious keywords
-- Subdomain analysis
-- HTTPS misuse
-- High-risk TLDs
-- URL shorteners
-- And more...
-
-**Weighted Decision**:
-```
-Final Score = (0.65 × Custom Score) + (0.35 × API Score)
-
-Classification:
-- 0-29   → SAFE
-- 30-59  → SUSPICIOUS  
-- 60-100 → MALICIOUS
-```
-
-### API Usage Example
+Frontend (new terminal):
 
 ```bash
-curl -X POST http://127.0.0.1:5000/api/check-url \
-     -H "Content-Type: application/json" \
-     -d '{"url": "https://example.com"}'
+cd frontend
+npm run dev
 ```
 
-**Response**:
-```json
-{
-  "verdict": "SAFE",
-  "final_score": 0,
-  "severity": "LOW",
-  "custom_score": 0,
-  "api_score": 0,
-  "detection_reasons": [...],
-  "security_recommendation": "...",
-  "score_breakdown": {...}
-}
-```
+Default local URLs:
+- Backend: http://127.0.0.1:5000
+- Frontend: http://127.0.0.1:5173
 
-## 📁 Project Structure
-
-```
-CyberShield/
-├── phishing_detector.py          # 🔴 Hybrid detection system
-├── app.py                         # Flask application
-├── utils.py                       # Helper functions
-├── test_phishing_detector.py     # Test suite
-├── example_usage.py               # Usage examples
-├── HYBRID_DETECTION_DOCS.md      # Complete documentation
-├── VIVA_QUICK_REFERENCE.py       # Academic guide
-├── PROJECT_SUMMARY.md            # Project overview
-├── templates/                     # HTML templates
-├── static/                        # CSS, JS, images
-└── requirements.txt               # Dependencies
-```
-
-## 🎓 Academic Project
-
-This project includes:
-- ✅ Original algorithm implementation (not just API wrapper)
-- ✅ Comprehensive documentation (100+ pages)
-- ✅ Test suite with multiple scenarios
-- ✅ Modular, clean code architecture
-- ✅ Viva preparation materials
-- ✅ Mathematical explanations
-
-### Documentation Files
-- **HYBRID_DETECTION_DOCS.md** - Complete system documentation
-- **VIVA_QUICK_REFERENCE.py** - Viva Q&A preparation
-- **PROJECT_SUMMARY.md** - Executive summary
-- **test_phishing_detector.py** - Comprehensive test suite
-- **example_usage.py** - Simple usage examples
-
-2. Open your web browser and navigate to:
-```
-http://localhost:5000
-```
-
-## API Documentation
-
-### URL Check Endpoint
-```
-POST /api/check-url
-Content-Type: application/json
-
-{
-    "url": "https://example.com"
-}
-```
-
-### IP Check Endpoint
-```
-POST /api/check-ip
-Content-Type: application/json
-
-{
-    "ip": "8.8.8.8"
-}
-```
-
-## Project Structure
-
-```
-cybershield/
-├── app.py              # Main Flask application
-├── utils.py            # API integration utilities
-├── requirements.txt    # Python dependencies
-├── .env               # Environment variables
-├── templates/         # HTML templates
-│   ├── base.html
-│   ├── index.html
-│   ├── phishing_checker.html
-│   ├── ip_checker.html
-│   └── about.html
-└── README.md
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- VirusTotal API
-- WhoisXML API
-- OpenStreetMap
-- Bootstrap
-- Flask 
+## Notes
+- Some external intel features depend on API keys and third-party service availability.
+- PDF generation routes using WeasyPrint are disabled automatically if WeasyPrint is not installed.
+- SQLite scan history is created automatically by Flask-SQLAlchemy on startup.
