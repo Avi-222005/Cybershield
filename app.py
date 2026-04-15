@@ -11,11 +11,15 @@ import tempfile
 import html
 from io import BytesIO
 
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import inch
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
 
 # Try to import weasyprint, but make it optional
 try:
@@ -737,6 +741,9 @@ def api_email_analyzer_advanced():
 
 @app.route('/api/download-email-analysis-pdf', methods=['POST'])
 def download_email_analysis_pdf():
+    if not REPORTLAB_AVAILABLE:
+        return jsonify({'error': 'PDF generation is not available. ReportLab library is not installed.'}), 503
+
     try:
         data = request.get_json() or {}
         raw_header = data.get('raw_header')
