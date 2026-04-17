@@ -16,6 +16,12 @@ function moduleState(
   progressStep: number,
   modules: Record<string, UnifiedReconModuleResult>,
 ): 'pending' | 'running' | 'ok' | 'error' {
+  const result = modules[moduleKey]
+  const explicitState = result?.state
+  if (explicitState === 'pending' || explicitState === 'running' || explicitState === 'ok' || explicitState === 'error') {
+    return explicitState
+  }
+
   const index = moduleOrder.indexOf(moduleKey)
 
   if (loading) {
@@ -24,7 +30,6 @@ function moduleState(
     return 'pending'
   }
 
-  const result = modules[moduleKey]
   if (!result) return 'pending'
   return result.ok ? 'ok' : 'error'
 }
@@ -80,7 +85,15 @@ export default function CompactModuleStatusGrid({
             </div>
 
             <div className="mt-1 text-[10px] text-gray-500 font-mono">
-              {moduleInfo ? `${moduleInfo.duration_ms} ms` : 'Pending'}
+              {status === 'running'
+                ? 'Running...'
+                : moduleInfo && moduleInfo.duration_ms > 0
+                ? `${moduleInfo.duration_ms} ms`
+                : status === 'pending'
+                ? 'Pending'
+                : moduleInfo
+                ? `${moduleInfo.duration_ms} ms`
+                : 'Pending'}
             </div>
 
             {loading && (

@@ -14,6 +14,7 @@ import type {
   TechStackResult,
   EmailAnalyzerResult,
   EmailAnalyzerAdvancedResult,
+  UnifiedReconJobStatus,
   UnifiedReconResult,
   UnifiedReconScanMode,
 } from '../types'
@@ -42,6 +43,25 @@ async function post<T>(path: string, body: Record<string, unknown>): Promise<T> 
     throw new Error('Server returned invalid JSON response')
   }
   
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`)
+  return data as T
+}
+
+async function get<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`)
+
+  const text = await res.text()
+  if (!text) {
+    throw new Error('Server returned an empty response')
+  }
+
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch {
+    throw new Error('Server returned invalid JSON response')
+  }
+
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`)
   return data as T
 }
@@ -82,8 +102,8 @@ export const advancedScan = (target: string, scan_type: 'quick' | 'full' | 'web'
 export const headerAnalysis = (url: string) =>
   post<HeaderAnalysisResult>('/http-header-audit', { target: url })
 
-export const techStackAnalysis = (url: string) =>
-  post<TechStackResult>('/tech-stack', { url })
+export const techStackAnalysis = (target: string) =>
+  post<TechStackResult>('/tech-stack-detect', { target })
 
 export const emailHeaderAnalysis = (raw_header: string) =>
   post<EmailAnalyzerResult>('/email-analyzer', { raw_header })
@@ -93,6 +113,12 @@ export const emailHeaderAnalysisAdvanced = (raw_header: string) =>
 
 export const unifiedReconScan = (target: string, scan_mode: UnifiedReconScanMode = 'standard') =>
   post<UnifiedReconResult>('/unified-recon', { target, scan_mode })
+
+export const startUnifiedReconScan = (target: string, scan_mode: UnifiedReconScanMode = 'standard') =>
+  post<UnifiedReconJobStatus>('/unified-recon/start', { target, scan_mode })
+
+export const getUnifiedReconScanStatus = (job_id: string) =>
+  get<UnifiedReconJobStatus>(`/unified-recon/status/${encodeURIComponent(job_id)}`)
 
 export async function downloadUnifiedReconPdf(payload: {
   result?: UnifiedReconResult

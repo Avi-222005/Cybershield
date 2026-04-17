@@ -168,6 +168,10 @@ export default function SubdomainFinder() {
     return 'bg-white/10 text-gray-300 border border-white/15'
   }
 
+  function hostUrl(host: string) {
+    return /^https?:\/\//i.test(host) ? host : `https://${host}`
+  }
+
   return (
     <PageWrapper>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-28 pb-20">
@@ -320,7 +324,16 @@ export default function SubdomainFinder() {
                   {filteredRows.length > 0 ? (
                     filteredRows.map((row) => (
                       <tr key={row.host} className="border-b border-white/5 align-top">
-                        <td className="py-2 pr-3 text-gray-100 font-mono">{row.host}</td>
+                        <td className="py-2 pr-3 text-gray-100 font-mono">
+                          <a
+                            href={hostUrl(row.host)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[#6ea8fe] hover:text-[#9ec5fe] underline underline-offset-2"
+                          >
+                            {row.host}
+                          </a>
+                        </td>
                         <td className="py-2 pr-3 text-gray-400 font-mono">{row.ip || '-'}</td>
                         <td className="py-2 pr-3">
                           <span className={`px-2 py-1 rounded-md text-xs font-semibold ${statusBadge(row.status)}`}>

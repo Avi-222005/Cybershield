@@ -5,9 +5,11 @@ import LoadingSpinner from '../components/ui/LoadingSpinner'
 import { dnsLookupPro } from '../lib/api'
 import type { DNSLookupProResult } from '../types'
 
-type TabKey = 'A' | 'AAAA' | 'CNAME' | 'MX' | 'NS' | 'TXT' | 'SOA' | 'CAA'
+const RECORD_TABS = ['ALL', 'A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA', 'CAA', 'DMARC', 'SPF', 'PTR'] as const
+type TabKey = typeof RECORD_TABS[number]
+type RecordTypeKey = Exclude<TabKey, 'ALL'>
 
-const RECORD_TABS: TabKey[] = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA', 'CAA']
+const RECORD_TYPES: RecordTypeKey[] = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA', 'CAA', 'DMARC', 'SPF', 'PTR']
 
 function gradeClass(grade: DNSLookupProResult['grade']) {
   if (grade === 'A+' || grade === 'A') return 'text-green-400 border-green-500/30 bg-green-500/10'
@@ -17,12 +19,20 @@ function gradeClass(grade: DNSLookupProResult['grade']) {
 
 export default function DNSLookup() {
   const [target, setTarget] = useState('')
-  const [activeTab, setActiveTab] = useState<TabKey>('A')
+  const [activeTab, setActiveTab] = useState<TabKey>('ALL')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<DNSLookupProResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const dmarcWeak = useMemo(() => result?.dmarc.policy === 'none' || !result?.dmarc.present, [result])
+  const allRecordRows = useMemo(() => {
+    if (!result) return []
+
+    return RECORD_TYPES.map((type) => ({
+      type,
+      values: result.records[type] || [],
+    }))
+  }, [result])
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -149,17 +159,54 @@ export default function DNSLookup() {
                   </button>
                 ))}
               </div>
-              <div className="space-y-1.5 max-h-80 overflow-auto pr-1">
-                {(result.records[activeTab] || []).length > 0 ? (
-                  result.records[activeTab].map((row, i) => (
-                    <div key={`${activeTab}-${i}`} className="bg-white/3 rounded-lg px-3 py-2 border border-white/5 text-sm text-gray-200 font-mono break-all">
-                      {row}
-                    </div>
-                  ))
-                ) : (
-                  <div className="bg-white/3 rounded-lg px-3 py-2 border border-white/5 text-sm text-gray-500 font-mono">No record found</div>
-                )}
-              </div>
+              {activeTab === 'ALL' ? (
+                <div className="overflow-x-auto rounded-lg border border-white/10">
+                  <table className="w-full min-w-[780px] text-sm">
+                    <thead className="bg-white/5 text-xs text-gray-500 font-mono">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Type</th>
+                        <th className="px-3 py-2 text-left">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allRecordRows.length > 0 ? (
+                        allRecordRows.map((row) => (
+                          <tr key={row.type} className="border-t border-white/10 align-top">
+                            <td className="px-3 py-2 text-gray-200 font-mono whitespace-nowrap">{row.type}</td>
+                            <td className="px-3 py-2 text-gray-300 font-mono break-all">
+                              {row.values.length > 0 ? (
+                                <div className="space-y-1">
+                                  {row.values.map((value, index) => (
+                                    <div key={`${row.type}-value-${index}`}>{value}</div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-gray-500">No records</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={2} className="px-3 py-3 text-gray-500 font-mono">No records found</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-80 overflow-auto pr-1">
+                  {(result.records[activeTab] || []).length > 0 ? (
+                    result.records[activeTab].map((row, i) => (
+                      <div key={`${activeTab}-${i}`} className="bg-white/3 rounded-lg px-3 py-2 border border-white/5 text-sm text-gray-200 font-mono break-all">
+                        {row}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="bg-white/3 rounded-lg px-3 py-2 border border-white/5 text-sm text-gray-500 font-mono">No record found</div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">

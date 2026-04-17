@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   BarChart3,
@@ -12,9 +12,14 @@ import PageWrapper from '../components/ui/PageWrapper'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
 import CompactModuleStatusGrid from '../components/ui/unifiedRecon/CompactModuleStatusGrid'
 import CollapsibleModuleCard from '../components/ui/unifiedRecon/CollapsibleModuleCard'
-import { downloadUnifiedReconPdf, unifiedReconScan } from '../lib/api'
+import {
+  downloadUnifiedReconPdf,
+  getUnifiedReconScanStatus,
+  startUnifiedReconScan,
+} from '../lib/api'
 import type {
   UnifiedReconFinding,
+  UnifiedReconModuleResult,
   UnifiedReconResult,
   UnifiedReconScanMode,
 } from '../types'
@@ -152,26 +157,146 @@ function TagList({ items, emptyText = 'None' }: { items: string[]; emptyText?: s
   )
 }
 
+function tableStatusPill(status: string): string {
+  const normalized = status.toLowerCase()
+  if (normalized === 'present' || normalized === 'live' || normalized === 'open' || normalized === 'valid') {
+    return 'text-green-300 border-green-500/35 bg-green-500/10'
+  }
+  if (normalized === 'weak' || normalized === 'redirect' || normalized === 'timeout' || normalized === 'filtered') {
+    return 'text-amber-300 border-amber-500/35 bg-amber-500/10'
+  }
+  if (normalized === 'missing' || normalized === 'dead' || normalized === 'invalid' || normalized === 'closed' || normalized === 'failed') {
+    return 'text-red-300 border-red-500/35 bg-red-500/10'
+  }
+  return 'text-gray-300 border-white/20 bg-white/5'
+}
+
+function riskLevelPill(risk: string): string {
+  const normalized = risk.toUpperCase()
+  if (normalized === 'HIGH') return 'text-red-300 border-red-500/35 bg-red-500/10'
+  if (normalized === 'MEDIUM') return 'text-amber-300 border-amber-500/35 bg-amber-500/10'
+  if (normalized === 'LOW') return 'text-green-300 border-green-500/35 bg-green-500/10'
+  return 'text-gray-300 border-white/20 bg-white/5'
+}
+
 export default function UnifiedReconScanner() {
   const [target, setTarget] = useState('')
   const [scanMode, setScanMode] = useState<UnifiedReconScanMode>('standard')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<UnifiedReconResult | null>(null)
-  const [progressStep, setProgressStep] = useState(0)
-  const [rawVisible, setRawVisible] = useState<Record<string, boolean>>({})
+  const [scanJobId, setScanJobId] = useState<string | null>(null)
+  const [liveModuleOrder, setLiveModuleOrder] = useState<string[]>(MODULES_BY_MODE.standard)
+  const [liveModules, setLiveModules] = useState<Record<string, UnifiedReconModuleResult>>({})
+  const pollingInFlight = useRef(false)
 
   const moduleOrder = useMemo(() => MODULES_BY_MODE[scanMode], [scanMode])
+  const resultModuleOrder = useMemo(
+    () => (result ? MODULES_BY_MODE[result.scan_mode] : moduleOrder),
+    [result, moduleOrder],
+  )
+
+  const scanProgress = useMemo(() => {
+    const order = liveModuleOrder.length > 0 ? liveModuleOrder : moduleOrder
+    const total = order.length
+    if (!loading || total === 0) {
+      return {
+        total,
+        done: 0,
+        running: 0,
+        pending: total,
+        runningLabel: null as string | null,
+      }
+    }
+
+    let done = 0
+    let running = 0
+    let pending = 0
+    let runningLabel: string | null = null
+
+    for (const key of order) {
+      const entry = liveModules[key]
+      const state = entry?.state || (entry ? (entry.ok ? 'ok' : 'error') : 'pending')
+
+      if (state === 'running') {
+        running += 1
+        if (!runningLabel) {
+          runningLabel = MODULE_LABELS[key] || key
+        }
+      } else if (state === 'ok' || state === 'error') {
+        done += 1
+      } else {
+        pending += 1
+      }
+    }
+
+    return {
+      total,
+      done,
+      running,
+      pending,
+      runningLabel,
+    }
+  }, [loading, liveModuleOrder, liveModules, moduleOrder])
 
   useEffect(() => {
-    if (!loading) return
-    setProgressStep(0)
-    const intervalId = window.setInterval(() => {
-      setProgressStep((prev) => (prev + 1) % Math.max(1, moduleOrder.length))
-    }, 700)
+    if (!loading || !scanJobId) {
+      pollingInFlight.current = false
+      return
+    }
 
-    return () => window.clearInterval(intervalId)
-  }, [loading, moduleOrder.length])
+    let cancelled = false
+
+    const pollStatus = async () => {
+      if (cancelled || pollingInFlight.current) return
+      pollingInFlight.current = true
+      try {
+        const status = await getUnifiedReconScanStatus(scanJobId)
+        if (cancelled) return
+
+        if (Array.isArray(status.module_order) && status.module_order.length > 0) {
+          setLiveModuleOrder(status.module_order)
+        }
+        if (status.modules) {
+          setLiveModules(status.modules)
+        }
+
+        if (status.status === 'completed') {
+          if (status.result) {
+            setResult(status.result)
+            setError(null)
+          } else {
+            setError('Scan completed without a result payload.')
+          }
+          setLoading(false)
+          setScanJobId(null)
+        } else if (status.status === 'failed') {
+          setError(status.error || 'Unified recon scan failed')
+          setLoading(false)
+          setScanJobId(null)
+        }
+      } catch (err: unknown) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to fetch scan status')
+          setLoading(false)
+          setScanJobId(null)
+        }
+      } finally {
+        pollingInFlight.current = false
+      }
+    }
+
+    void pollStatus()
+    const intervalId = window.setInterval(() => {
+      void pollStatus()
+    }, 1000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+      pollingInFlight.current = false
+    }
+  }, [loading, scanJobId])
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -181,20 +306,45 @@ export default function UnifiedReconScanner() {
     setError(null)
     setLoading(true)
     setResult(null)
-    setRawVisible({})
+    setScanJobId(null)
+    setLiveModules({})
+    setLiveModuleOrder(MODULES_BY_MODE[scanMode])
 
     try {
-      const data = await unifiedReconScan(trimmed, scanMode)
-      setResult(data)
+      const startPayload = await startUnifiedReconScan(trimmed, scanMode)
+
+      if (Array.isArray(startPayload.module_order) && startPayload.module_order.length > 0) {
+        setLiveModuleOrder(startPayload.module_order)
+      }
+      if (startPayload.modules) {
+        setLiveModules(startPayload.modules)
+      }
+
+      if (startPayload.status === 'completed') {
+        if (startPayload.result) {
+          setResult(startPayload.result)
+        } else {
+          setError('Scan completed without a result payload.')
+        }
+        setLoading(false)
+        return
+      }
+
+      if (startPayload.status === 'failed') {
+        setError(startPayload.error || 'Unified recon scan failed')
+        setLoading(false)
+        return
+      }
+
+      if (!startPayload.job_id) {
+        throw new Error('Scan job did not return a valid job id.')
+      }
+
+      setScanJobId(startPayload.job_id)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Unified recon scan failed')
-    } finally {
       setLoading(false)
     }
-  }
-
-  function toggleRaw(moduleKey: string) {
-    setRawVisible((prev) => ({ ...prev, [moduleKey]: !prev[moduleKey] }))
   }
 
   function exportJson() {
@@ -230,33 +380,13 @@ export default function UnifiedReconScanner() {
     }
   }
 
-  function renderRaw(moduleKey: string) {
-    if (!result) return null
-    const isVisible = !!rawVisible[moduleKey]
-
-    return (
-      <div className="mt-3">
-        <button
-          type="button"
-          onClick={() => toggleRaw(moduleKey)}
-          className="text-xs font-mono px-2.5 py-1.5 rounded border border-white/15 text-gray-300 hover:bg-white/5"
-        >
-          {isVisible ? 'Hide Raw Data' : 'View Raw Data'}
-        </button>
-        {isVisible && (
-          <pre className="mt-2 bg-[#08101d] border border-white/10 rounded-lg p-3 text-xs text-gray-300 overflow-auto max-h-[320px]">
-            {JSON.stringify(result.modules[moduleKey]?.data || {}, null, 2)}
-          </pre>
-        )}
-      </div>
-    )
-  }
-
   function renderModuleCard(moduleKey: string) {
     if (!result) return null
     const moduleScore = result.module_scores[moduleKey]
     const moduleInfo = result.modules[moduleKey]
     const moduleView = result.module_views
+    const moduleData = (moduleInfo?.data || {}) as Record<string, unknown>
+    const moduleError = moduleInfo?.error
 
     const badge = moduleScore ? (
       <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-white/15 text-gray-200 bg-white/5">
@@ -266,8 +396,17 @@ export default function UnifiedReconScanner() {
 
     if (moduleKey === 'dns') {
       const view = moduleView.dns
+      const records = Object.entries((moduleData.records as Record<string, string[]>) || {})
+      const hasRecords = records.length > 0
+
       return (
         <CollapsibleModuleCard key={moduleKey} title="DNS Intelligence" subtitle={`Completed in ${moduleInfo?.duration_ms || 0} ms`} badge={badge}>
+          {moduleError && (
+            <div className="mt-3 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-xs text-red-300 font-mono">
+              {moduleError}
+            </div>
+          )}
+
           <div className="grid md:grid-cols-2 gap-2 mt-3">
             <KeyValueRow label="DNS Grade" value={view?.dns_grade} />
             <KeyValueRow label="DNSSEC" value={view?.dnssec_enabled ? 'Enabled' : 'Disabled'} />
@@ -287,58 +426,172 @@ export default function UnifiedReconScanner() {
             <TagList items={view?.recommendations || []} emptyText="No immediate DNS remediation required." />
           </div>
 
-          {renderRaw(moduleKey)}
+          <div className="mt-4">
+            <div className="text-xs text-gray-500 font-mono mb-2">DNS Records</div>
+            {hasRecords ? (
+              <div className="overflow-x-auto rounded-lg border border-white/10">
+                <table className="w-full min-w-[760px] text-sm">
+                  <thead className="bg-white/5 text-xs text-gray-500 font-mono">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Type</th>
+                      <th className="px-3 py-2 text-left">Values</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {records.map(([type, values]) => (
+                      <tr key={type} className="border-t border-white/10 align-top">
+                        <td className="px-3 py-2 text-gray-200 font-mono whitespace-nowrap">{type}</td>
+                        <td className="px-3 py-2">
+                          {Array.isArray(values) && values.length > 0 ? (
+                            <div className="space-y-1">
+                              {values.slice(0, 8).map((value) => (
+                                <div key={`${type}-${value}`} className="text-gray-300 font-mono break-all text-xs sm:text-sm">
+                                  {value}
+                                </div>
+                              ))}
+                              {values.length > 8 && (
+                                <div className="text-[11px] text-gray-500 font-mono">+{values.length - 8} more</div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-gray-500 font-mono">No records</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500 font-mono">No DNS record table available.</div>
+            )}
+          </div>
         </CollapsibleModuleCard>
       )
     }
 
     if (moduleKey === 'subdomains') {
       const view = moduleView.subdomains
+      const rows = ((moduleData.subdomains as Array<Record<string, unknown>>) || []).slice(0, 120)
+      const historicalRows = ((moduleData.historical_candidates as Array<Record<string, unknown>>) || []).slice(0, 40)
+
       return (
         <CollapsibleModuleCard key={moduleKey} title="Subdomain Discovery" subtitle={`Completed in ${moduleInfo?.duration_ms || 0} ms`} badge={badge}>
+          {moduleError && (
+            <div className="mt-3 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-xs text-red-300 font-mono">
+              {moduleError}
+            </div>
+          )}
+
           <div className="grid sm:grid-cols-3 gap-2 mt-3">
             <KeyValueRow label="Total Found" value={view?.total_found} />
             <KeyValueRow label="Live Hosts" value={view?.live_hosts} />
             <KeyValueRow label="High Risk Hosts" value={view?.high_risk_hosts} />
           </div>
 
-          <div className="mt-3 overflow-x-auto rounded-lg border border-white/10">
-            <table className="w-full min-w-[640px] text-sm">
+          <div className="mt-4 overflow-x-auto rounded-lg border border-white/10">
+            <table className="w-full min-w-[980px] text-sm">
               <thead className="bg-white/5 text-xs text-gray-500 font-mono">
                 <tr>
                   <th className="px-3 py-2 text-left">Host</th>
+                  <th className="px-3 py-2 text-left">IP</th>
                   <th className="px-3 py-2 text-left">Status</th>
+                  <th className="px-3 py-2 text-left">Code</th>
                   <th className="px-3 py-2 text-left">Risk</th>
                   <th className="px-3 py-2 text-left">Title</th>
+                  <th className="px-3 py-2 text-left">Sources</th>
                 </tr>
               </thead>
               <tbody>
-                {(view?.top_risky_subdomains || []).map((row) => (
-                  <tr key={row.host} className="border-t border-white/10">
-                    <td className="px-3 py-2 font-mono text-gray-200">{row.host}</td>
-                    <td className="px-3 py-2 text-gray-300 font-mono">{row.status}</td>
-                    <td className="px-3 py-2 text-gray-300 font-mono">{row.risk}</td>
-                    <td className="px-3 py-2 text-gray-300">{row.title || '-'}</td>
-                  </tr>
-                ))}
-                {(!view?.top_risky_subdomains || view.top_risky_subdomains.length === 0) && (
+                {rows.map((row) => {
+                  const host = String(row.host || '-')
+                  const status = String(row.status || '-')
+                  const risk = String(row.risk || '-')
+                  const code = row.http_code === null || row.http_code === undefined ? '-' : String(row.http_code)
+                  const sourceList = Array.isArray(row.sources) ? row.sources.map((s) => String(s)).join(', ') : '-'
+
+                  return (
+                    <tr key={host} className="border-t border-white/10">
+                      <td className="px-3 py-2 font-mono text-gray-200">{host}</td>
+                      <td className="px-3 py-2 text-gray-300 font-mono">{String(row.ip || '-')}</td>
+                      <td className="px-3 py-2">
+                        <span className={`text-[11px] px-2 py-0.5 rounded border font-mono ${tableStatusPill(status)}`}>
+                          {status}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-gray-300 font-mono">{code}</td>
+                      <td className="px-3 py-2">
+                        <span className={`text-[11px] px-2 py-0.5 rounded border font-mono ${riskLevelPill(risk)}`}>
+                          {risk}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-gray-300 max-w-[280px] truncate" title={String(row.title || '-')}>{String(row.title || '-')}</td>
+                      <td className="px-3 py-2 text-gray-400 text-xs font-mono max-w-[220px] truncate" title={sourceList}>{sourceList}</td>
+                    </tr>
+                  )
+                })}
+                {rows.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-3 py-3 text-gray-500 font-mono">No risky subdomain rows available.</td>
+                    <td colSpan={7} className="px-3 py-3 text-gray-500 font-mono">No subdomain rows available.</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
 
-          {renderRaw(moduleKey)}
+          {historicalRows.length > 0 && (
+            <div className="mt-4">
+              <div className="text-xs text-gray-500 font-mono mb-2">Historical Unresolved Candidates</div>
+              <div className="overflow-x-auto rounded-lg border border-white/10">
+                <table className="w-full min-w-[760px] text-sm">
+                  <thead className="bg-white/5 text-xs text-gray-500 font-mono">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Host</th>
+                      <th className="px-3 py-2 text-left">Risk</th>
+                      <th className="px-3 py-2 text-left">Reason</th>
+                      <th className="px-3 py-2 text-left">Sources</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historicalRows.map((row) => {
+                      const host = String(row.host || '-')
+                      const risk = String(row.risk || '-')
+                      const sourceList = Array.isArray(row.sources) ? row.sources.map((s) => String(s)).join(', ') : '-'
+                      return (
+                        <tr key={`historical-${host}`} className="border-t border-white/10">
+                          <td className="px-3 py-2 text-gray-200 font-mono">{host}</td>
+                          <td className="px-3 py-2">
+                            <span className={`text-[11px] px-2 py-0.5 rounded border font-mono ${riskLevelPill(risk)}`}>
+                              {risk}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-gray-300">{String(row.reason || '-')}</td>
+                          <td className="px-3 py-2 text-gray-400 text-xs font-mono">{sourceList}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </CollapsibleModuleCard>
       )
     }
 
     if (moduleKey === 'headers') {
       const view = moduleView.headers
+      const securityRows = ((moduleData.security_headers as Array<Record<string, string>>) || []).slice(0, 40)
+      const cookieRows = ((moduleData.cookies as Array<Record<string, unknown>>) || []).slice(0, 60)
+
       return (
         <CollapsibleModuleCard key={moduleKey} title="HTTP Header Audit" subtitle={`Completed in ${moduleInfo?.duration_ms || 0} ms`} badge={badge}>
+          {moduleError && (
+            <div className="mt-3 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-xs text-red-300 font-mono">
+              {moduleError}
+            </div>
+          )}
+
           <div className="grid md:grid-cols-2 gap-2 mt-3">
             <KeyValueRow label="Header Grade" value={view?.header_grade} />
             <KeyValueRow label="HSTS" value={view?.hsts_status} />
@@ -351,72 +604,196 @@ export default function UnifiedReconScanner() {
             <TagList items={view?.missing_security_headers || []} emptyText="No critical header gaps." />
           </div>
 
-          {renderRaw(moduleKey)}
+          <div className="mt-4">
+            <div className="text-xs text-gray-500 font-mono mb-2">Security Header Matrix</div>
+            <div className="overflow-x-auto rounded-lg border border-white/10">
+              <table className="w-full min-w-[760px] text-sm">
+                <thead className="bg-white/5 text-xs text-gray-500 font-mono">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Header</th>
+                    <th className="px-3 py-2 text-left">Status</th>
+                    <th className="px-3 py-2 text-left">Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {securityRows.map((row) => {
+                    const header = String(row.header || '-')
+                    const status = String(row.status || '-')
+                    return (
+                      <tr key={header} className="border-t border-white/10">
+                        <td className="px-3 py-2 text-gray-200 font-mono">{header}</td>
+                        <td className="px-3 py-2">
+                          <span className={`text-[11px] px-2 py-0.5 rounded border font-mono ${tableStatusPill(status)}`}>
+                            {status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-gray-300">{String(row.notes || '-')}</td>
+                      </tr>
+                    )
+                  })}
+                  {securityRows.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="px-3 py-3 text-gray-500 font-mono">No security header rows available.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <div className="text-xs text-gray-500 font-mono mb-2">Cookie Security Table</div>
+            <div className="overflow-x-auto rounded-lg border border-white/10">
+              <table className="w-full min-w-[920px] text-sm">
+                <thead className="bg-white/5 text-xs text-gray-500 font-mono">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Cookie</th>
+                    <th className="px-3 py-2 text-left">HttpOnly</th>
+                    <th className="px-3 py-2 text-left">Secure</th>
+                    <th className="px-3 py-2 text-left">SameSite</th>
+                    <th className="px-3 py-2 text-left">Risk</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cookieRows.map((row) => {
+                    const name = String(row.cookie_name || '-')
+                    const risk = String(row.risk || 'None')
+                    return (
+                      <tr key={name} className="border-t border-white/10">
+                        <td className="px-3 py-2 text-gray-200 font-mono">{name}</td>
+                        <td className="px-3 py-2 text-gray-300 font-mono">{row.httponly ? 'Yes' : 'No'}</td>
+                        <td className="px-3 py-2 text-gray-300 font-mono">{row.secure ? 'Yes' : 'No'}</td>
+                        <td className="px-3 py-2 text-gray-300 font-mono">{String(row.samesite || '-')}</td>
+                        <td className="px-3 py-2 text-gray-300">{risk}</td>
+                      </tr>
+                    )
+                  })}
+                  {cookieRows.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-3 py-3 text-gray-500 font-mono">No cookie security rows available.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </CollapsibleModuleCard>
       )
     }
 
     if (moduleKey === 'ssl') {
       const view = moduleView.ssl
+      const sslStatus = String(moduleData.status || (view?.valid ? 'Valid' : 'Invalid'))
+
       return (
         <CollapsibleModuleCard key={moduleKey} title="SSL Certificate" subtitle={`Completed in ${moduleInfo?.duration_ms || 0} ms`} badge={badge}>
+          {moduleError && (
+            <div className="mt-3 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-xs text-red-300 font-mono">
+              {moduleError}
+            </div>
+          )}
+
           <div className="grid md:grid-cols-2 gap-2 mt-3">
             <KeyValueRow label="Validity" value={view?.valid ? 'Valid' : 'Invalid'} />
             <KeyValueRow label="Issuer" value={view?.issuer} />
             <KeyValueRow label="Expires In" value={view?.expires_in_days !== undefined ? `${view?.expires_in_days} days` : 'N/A'} />
             <KeyValueRow label="Cipher Strength" value={view?.cipher_strength || 'Unknown'} />
+            <KeyValueRow label="Subject" value={moduleData.subject as string} />
+            <KeyValueRow label="Valid From" value={moduleData.valid_from as string} />
+            <KeyValueRow label="Valid Until" value={moduleData.valid_until as string} />
+            <KeyValueRow label="Status" value={sslStatus} />
           </div>
-          {renderRaw(moduleKey)}
+
+          {!moduleInfo?.ok && (
+            <div className="mt-3 text-sm text-red-300 font-mono">
+              {String(moduleData.message || 'SSL module failed to fetch certificate details.')}
+            </div>
+          )}
         </CollapsibleModuleCard>
       )
     }
 
     if (moduleKey === 'ports') {
       const view = moduleView.ports
+      const rows = ((moduleData.open_port_details as Array<Record<string, unknown>>) || [])
+      const fallbackRows = ((moduleData.results as Array<Record<string, unknown>>) || []).filter((row) => String(row.status || '').toLowerCase() === 'open')
+      const visibleRows = (rows.length > 0 ? rows : fallbackRows).slice(0, 80)
+
       return (
         <CollapsibleModuleCard key={moduleKey} title="Port Exposure" subtitle={`Completed in ${moduleInfo?.duration_ms || 0} ms`} badge={badge}>
+          {moduleError && (
+            <div className="mt-3 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-xs text-red-300 font-mono">
+              {moduleError}
+            </div>
+          )}
+
           <div className="grid sm:grid-cols-2 gap-2 mt-3">
             <KeyValueRow label="Open Ports" value={view?.open_ports_count} />
             <KeyValueRow label="Risky Ports" value={view?.risky_ports_count} />
           </div>
 
           <div className="mt-3 overflow-x-auto rounded-lg border border-white/10">
-            <table className="w-full min-w-[620px] text-sm">
+            <table className="w-full min-w-[920px] text-sm">
               <thead className="bg-white/5 text-xs text-gray-500 font-mono">
                 <tr>
                   <th className="px-3 py-2 text-left">Port</th>
+                  <th className="px-3 py-2 text-left">Status</th>
                   <th className="px-3 py-2 text-left">Service</th>
+                  <th className="px-3 py-2 text-left">Product/Version</th>
                   <th className="px-3 py-2 text-left">Risk</th>
-                  <th className="px-3 py-2 text-left">Notes</th>
+                  <th className="px-3 py-2 text-left">Banner / Notes</th>
                 </tr>
               </thead>
               <tbody>
-                {(view?.services_table || []).slice(0, 20).map((row) => (
-                  <tr key={`${row.port}-${row.service}`} className="border-t border-white/10">
-                    <td className="px-3 py-2 text-gray-200 font-mono">{row.port}</td>
-                    <td className="px-3 py-2 text-gray-300 font-mono">{row.service}</td>
-                    <td className="px-3 py-2 text-gray-300 font-mono">{row.risk}</td>
-                    <td className="px-3 py-2 text-gray-300">{row.notes}</td>
-                  </tr>
-                ))}
-                {(!view?.services_table || view.services_table.length === 0) && (
+                {visibleRows.map((row) => {
+                  const port = String(row.port || '-')
+                  const status = String(row.status || 'open')
+                  const risk = row.risky ? 'HIGH' : 'LOW'
+                  const productVersion = `${String(row.product || '')}${row.version ? ` ${String(row.version)}` : ''}`.trim() || '-'
+                  const notes = String(row.issue || row.notes || row.banner || '-')
+                  return (
+                    <tr key={`${port}-${String(row.service || 'unknown')}`} className="border-t border-white/10">
+                      <td className="px-3 py-2 text-gray-200 font-mono">{port}</td>
+                      <td className="px-3 py-2">
+                        <span className={`text-[11px] px-2 py-0.5 rounded border font-mono ${tableStatusPill(status)}`}>
+                          {status.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-gray-300 font-mono">{String(row.service || 'Unknown')}</td>
+                      <td className="px-3 py-2 text-gray-300 font-mono">{productVersion}</td>
+                      <td className="px-3 py-2">
+                        <span className={`text-[11px] px-2 py-0.5 rounded border font-mono ${riskLevelPill(risk)}`}>{risk}</span>
+                      </td>
+                      <td className="px-3 py-2 text-gray-300 max-w-[320px] truncate" title={notes}>{notes}</td>
+                    </tr>
+                  )
+                })}
+                {visibleRows.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-3 py-3 text-gray-500 font-mono">No open service rows available.</td>
+                    <td colSpan={6} className="px-3 py-3 text-gray-500 font-mono">No open service rows available.</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
-
-          {renderRaw(moduleKey)}
         </CollapsibleModuleCard>
       )
     }
 
     if (moduleKey === 'tech') {
       const view = moduleView.tech
+      const technologies = ((moduleData.technologies as string[]) || []).slice(0, 60)
+      const categorized = (moduleData.categorized as Record<string, string[]>) || {}
+      const categoryRows = Object.entries(categorized)
+
       return (
         <CollapsibleModuleCard key={moduleKey} title="Technology Fingerprint" subtitle={`Completed in ${moduleInfo?.duration_ms || 0} ms`} badge={badge}>
+          {moduleError && (
+            <div className="mt-3 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-xs text-red-300 font-mono">
+              {moduleError}
+            </div>
+          )}
+
           <div className="grid md:grid-cols-2 gap-3 mt-3">
             <div>
               <div className="text-xs text-gray-500 font-mono mb-1.5">Server</div>
@@ -440,22 +817,101 @@ export default function UnifiedReconScanner() {
             </div>
           </div>
 
-          {renderRaw(moduleKey)}
+          <div className="mt-4">
+            <div className="text-xs text-gray-500 font-mono mb-2">Detected Technologies</div>
+            <TagList items={technologies} emptyText="No technologies detected." />
+          </div>
+
+          <div className="mt-4">
+            <div className="text-xs text-gray-500 font-mono mb-2">Category Breakdown</div>
+            <div className="overflow-x-auto rounded-lg border border-white/10">
+              <table className="w-full min-w-[760px] text-sm">
+                <thead className="bg-white/5 text-xs text-gray-500 font-mono">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Category</th>
+                    <th className="px-3 py-2 text-left">Technologies</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {categoryRows.map(([category, items]) => (
+                    <tr key={category} className="border-t border-white/10 align-top">
+                      <td className="px-3 py-2 text-gray-200 font-mono">{category}</td>
+                      <td className="px-3 py-2 text-gray-300">{items.join(', ') || '-'}</td>
+                    </tr>
+                  ))}
+                  {categoryRows.length === 0 && (
+                    <tr>
+                      <td colSpan={2} className="px-3 py-3 text-gray-500 font-mono">No categorized technology rows available.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </CollapsibleModuleCard>
       )
     }
 
     if (moduleKey === 'whois') {
       const view = moduleView.whois
+      const registrant = (moduleData.registrant as Record<string, unknown>) || {}
+      const administrativeContact = (moduleData.administrativeContact as Record<string, unknown>) || {}
+      const technicalContact = (moduleData.technicalContact as Record<string, unknown>) || {}
+      const nameServers = (moduleData.nameServers as string[]) || []
+
       return (
         <CollapsibleModuleCard key={moduleKey} title="WHOIS Intelligence" subtitle={`Completed in ${moduleInfo?.duration_ms || 0} ms`} badge={badge}>
+          {moduleError && (
+            <div className="mt-3 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-xs text-red-300 font-mono">
+              {moduleError}
+            </div>
+          )}
+
           <div className="grid md:grid-cols-2 gap-2 mt-3">
             <KeyValueRow label="Registrar" value={view?.registrar} />
             <KeyValueRow label="Domain Age" value={view?.domain_age_days !== null && view?.domain_age_days !== undefined ? `${view.domain_age_days} days` : 'N/A'} />
             <KeyValueRow label="Expiry Date" value={view?.expiry_date} />
             <KeyValueRow label="Registrant Country" value={view?.registrant_country} />
+            <KeyValueRow label="Domain" value={moduleData.domainName as string} />
+            <KeyValueRow label="Status" value={moduleData.status as string} />
+            <KeyValueRow label="Created" value={moduleData.createdDate as string} />
+            <KeyValueRow label="Updated" value={moduleData.updatedDate as string} />
           </div>
-          {renderRaw(moduleKey)}
+
+          <div className="mt-4 grid lg:grid-cols-3 gap-3">
+            <div className="rounded-lg border border-white/10 bg-white/3 p-3">
+              <div className="text-xs text-gray-500 font-mono mb-2">Registrant</div>
+              <div className="space-y-1 text-xs text-gray-300 font-mono">
+                <div>Name: {String(registrant.name || 'N/A')}</div>
+                <div>Org: {String(registrant.organization || 'N/A')}</div>
+                <div>Email: {String(registrant.email || 'N/A')}</div>
+                <div>Country: {String(registrant.country || 'N/A')}</div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/3 p-3">
+              <div className="text-xs text-gray-500 font-mono mb-2">Administrative Contact</div>
+              <div className="space-y-1 text-xs text-gray-300 font-mono">
+                <div>Name: {String(administrativeContact.name || 'N/A')}</div>
+                <div>Org: {String(administrativeContact.organization || 'N/A')}</div>
+                <div>Email: {String(administrativeContact.email || 'N/A')}</div>
+                <div>Country: {String(administrativeContact.country || 'N/A')}</div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/3 p-3">
+              <div className="text-xs text-gray-500 font-mono mb-2">Technical Contact</div>
+              <div className="space-y-1 text-xs text-gray-300 font-mono">
+                <div>Name: {String(technicalContact.name || 'N/A')}</div>
+                <div>Org: {String(technicalContact.organization || 'N/A')}</div>
+                <div>Email: {String(technicalContact.email || 'N/A')}</div>
+                <div>Country: {String(technicalContact.country || 'N/A')}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <div className="text-xs text-gray-500 font-mono mb-2">Name Servers</div>
+            <TagList items={nameServers} emptyText="No nameserver records available." />
+          </div>
         </CollapsibleModuleCard>
       )
     }
@@ -529,8 +985,48 @@ export default function UnifiedReconScanner() {
         </form>
 
         {loading && (
-          <div className="glass-card rounded-2xl mb-6">
-            <LoadingSpinner label="Running weighted reconnaissance and normalizing intelligence outputs..." />
+          <div className="space-y-4 mb-6">
+            <div className="glass-card rounded-2xl">
+              <LoadingSpinner label="Running weighted reconnaissance and normalizing intelligence outputs..." />
+            </div>
+
+            <div className="glass-card rounded-2xl p-5">
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                <h3 className="text-sm font-semibold text-white">Scan Status Viewer</h3>
+                <span className="text-xs font-mono px-2.5 py-1 rounded border border-[#0d6efd]/30 bg-[#0d6efd]/10 text-[#6ea8fe]">
+                  {scanProgress.runningLabel ? `Running: ${scanProgress.runningLabel}` : 'Initializing'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="rounded-lg border border-white/10 bg-white/3 px-3 py-2">
+                  <div className="text-[10px] text-gray-500 font-mono uppercase">Done</div>
+                  <div className="text-sm text-green-300 font-mono">{scanProgress.done}</div>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-white/3 px-3 py-2">
+                  <div className="text-[10px] text-gray-500 font-mono uppercase">Running</div>
+                  <div className="text-sm text-[#6ea8fe] font-mono">{scanProgress.running}</div>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-white/3 px-3 py-2">
+                  <div className="text-[10px] text-gray-500 font-mono uppercase">Pending</div>
+                  <div className="text-sm text-amber-300 font-mono">{scanProgress.pending}</div>
+                </div>
+              </div>
+
+              <div className="text-[11px] text-gray-500 font-mono mb-3">
+                {scanProgress.total > 0
+                  ? `${scanProgress.done + scanProgress.running}/${scanProgress.total} modules in progress`
+                  : 'Preparing module pipeline...'}
+              </div>
+
+              <CompactModuleStatusGrid
+                moduleOrder={liveModuleOrder.length > 0 ? liveModuleOrder : moduleOrder}
+                moduleLabels={MODULE_LABELS}
+                modules={liveModules}
+                loading={loading}
+                progressStep={0}
+              />
+            </div>
           </div>
         )}
 
@@ -604,7 +1100,7 @@ export default function UnifiedReconScanner() {
                 <div className="mt-4">
                   <div className="text-xs text-gray-500 font-mono mb-2">Module Grades</div>
                   <div className="flex flex-wrap gap-1.5">
-                    {moduleOrder.map((moduleKey) => {
+                    {resultModuleOrder.map((moduleKey) => {
                       const score = result.module_scores[moduleKey]
                       if (!score) return null
                       return (
@@ -670,18 +1166,18 @@ export default function UnifiedReconScanner() {
                 <BarChart3 size={14} className="text-[#6ea8fe]" /> Module Status
               </h3>
               <CompactModuleStatusGrid
-                moduleOrder={moduleOrder}
+                moduleOrder={resultModuleOrder}
                 moduleLabels={MODULE_LABELS}
                 modules={result.modules}
                 loading={loading}
-                progressStep={progressStep}
+                progressStep={0}
               />
             </div>
 
             <div className="glass-card rounded-2xl p-5">
               <h3 className="text-sm font-semibold text-white mb-3">Detailed Module Breakdown</h3>
               <div className="space-y-3">
-                {moduleOrder.map((moduleKey) => renderModuleCard(moduleKey))}
+                {resultModuleOrder.map((moduleKey) => renderModuleCard(moduleKey))}
               </div>
             </div>
           </div>

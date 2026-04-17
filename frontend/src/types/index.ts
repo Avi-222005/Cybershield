@@ -440,10 +440,41 @@ export interface HeaderAnalysisResult {
   headers: Record<string, string>
 }
 
+export interface TechStackDetectedTechnology {
+  name: string
+  normalized_name: string
+  version: string
+  confidence: number
+  categories: string[]
+  website?: string | null
+  section?: string
+  signals?: string[]
+}
+
+export interface TechStackSummary {
+  total: number
+  high_confidence: number
+  frameworks: string[]
+  servers: string[]
+  security: string[]
+}
+
 export interface TechStackResult {
+  target: string
   url: string
+  detected: TechStackDetectedTechnology[]
+  summary: TechStackSummary
+  grouped: Record<string, TechStackDetectedTechnology[]>
   technologies: string[]
   categorized: Record<string, string[]>
+  categorized_verbose?: Record<string, string[]>
+  metadata?: {
+    final_url: string
+    title: string
+    status_code: number
+    generated_at: string
+  }
+  cached?: boolean
 }
 
 export interface EmailAnalyzerResult {
@@ -503,12 +534,29 @@ export interface EmailAnalyzerAdvancedResult {
 }
 
 export type UnifiedReconScanMode = 'quick' | 'standard' | 'deep'
+export type UnifiedReconModuleState = 'pending' | 'running' | 'ok' | 'error'
 
 export interface UnifiedReconModuleResult {
   ok: boolean
   duration_ms: number
   error: string | null
   data: Record<string, any>
+  state?: UnifiedReconModuleState
+}
+
+export interface UnifiedReconJobStatus {
+  job_id: string
+  status: 'running' | 'completed' | 'failed'
+  target: string
+  scan_mode: UnifiedReconScanMode
+  started_at: string
+  updated_at: string
+  module_order: string[]
+  total_modules: number
+  completed_modules: number
+  modules: Record<string, UnifiedReconModuleResult>
+  error?: string
+  result?: UnifiedReconResult
 }
 
 export interface UnifiedReconFinding {
