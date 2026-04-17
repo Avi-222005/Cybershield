@@ -5,17 +5,6 @@ import LoadingSpinner from '../components/ui/LoadingSpinner'
 import { emailHeaderAnalysisAdvanced } from '../lib/api'
 import type { EmailAnalyzerAdvancedResult } from '../types'
 
-const SAMPLE_HEADER = `Received: from mail.example.com (203.0.113.5)
-Received: by mx.google.com with SMTP id abc123; Tue, 14 Apr 2026 10:12:58 +0000
-From: test@example.com
-To: user@gmail.com
-Subject: Urgent Verify Login Alert
-Date: Tue, 14 Apr 2026 10:12:55 +0000
-Return-Path: <bounce@alerts-example.xyz>
-Reply-To: support@helpdesk-example.xyz
-Message-ID: <abc123@example.com>
-Authentication-Results: mx.google.com; spf=fail smtp.mailfrom=alerts-example.xyz; dkim=fail header.d=alerts-example.xyz; dmarc=fail`
-
 function authBadge(value: string) {
   const normalized = (value || '').toLowerCase()
   if (normalized === 'pass') {
@@ -129,13 +118,6 @@ export default function EmailHeaderAnalyzer() {
             <button className="flex items-center gap-2 px-6 py-3 bg-[#0d6efd] hover:bg-[#0b5ed7] !text-white font-semibold rounded-xl text-sm">
               <Search size={16} />
               Analyze Email
-            </button>
-            <button
-              type="button"
-              onClick={() => setRawHeader(SAMPLE_HEADER)}
-              className="px-4 py-3 rounded-xl text-sm border border-white/15 text-gray-300 hover:text-white hover:bg-white/5"
-            >
-              Load Sample Header
             </button>
             <button
               type="button"

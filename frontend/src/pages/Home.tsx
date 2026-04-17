@@ -10,10 +10,20 @@ import {
   LayersIcon,
   Cpu,
   Database,
+  Radar,
 } from 'lucide-react'
 import PageWrapper from '../components/ui/PageWrapper'
 
 const features = [
+  {
+    icon: Radar,
+    title: 'Unified Recon Scanner',
+    description:
+      'Run one-click multi-module reconnaissance with unified scoring, prioritized findings, and executive-grade remediation output.',
+    href: '/unified-recon',
+    accentColor: '#06b6d4',
+    tags: ['One-Click Recon', 'Unified Score', 'Exportable Reports'],
+  },
   {
     icon: Globe,
     title: 'URL Phishing Checker',
@@ -158,7 +168,7 @@ export default function Home() {
           >
             <h2 className="text-3xl font-bold text-white mb-3">Security Intelligence Suite</h2>
             <p className="text-gray-500 max-w-md mx-auto text-sm">
-              Four specialized modules delivering comprehensive threat visibility
+              Specialized modules delivering comprehensive threat visibility
             </p>
           </motion.div>
 

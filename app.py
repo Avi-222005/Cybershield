@@ -11,6 +11,8 @@ import re
 import tempfile
 import html
 from io import BytesIO
+import threading
+import time
 
 try:
     from reportlab.lib import colors
@@ -40,13 +42,18 @@ from services import (
     get_whois_info,
     normalize_domain_input,
     dns_lookup,
+    dns_lookup_pro,
     subdomain_scan,
+    subdomain_finder_pro,
     port_scan,
     service_detection,
+    advanced_network_scan,
     header_analysis,
+    http_header_audit,
     analyze_tech_stack,
     analyze_email_header,
     analyze_email_header_advanced,
+    unified_recon_scan,
 )
 from phishing_detector import analyze_url_for_phishing
 from ip_analyzer import analyze_ip_hybrid
@@ -56,9 +63,37 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# CORS: Read allowed origins from env, fall back to localhost for development
-allowed_origins = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',')
-CORS(app, origins=[origin.strip() for origin in allowed_origins])
+def _build_cors_origins():
+    raw = os.getenv('CORS_ALLOWED_ORIGINS', '').strip()
+    if raw == '*':
+        return '*'
+
+    origins = []
+    if raw:
+        origins.extend([origin.strip().rstrip('/') for origin in raw.split(',') if origin.strip()])
+
+    # Common deployment env vars to reduce manual config mistakes.
+    frontend_url = os.getenv('FRONTEND_URL', '').strip()
+    if frontend_url:
+        origins.append(frontend_url.rstrip('/'))
+
+    render_external_url = os.getenv('RENDER_EXTERNAL_URL', '').strip()
+    if render_external_url:
+        origins.append(render_external_url.rstrip('/'))
+
+    vercel_url = os.getenv('VERCEL_URL', '').strip()
+    if vercel_url:
+        if not vercel_url.startswith('http://') and not vercel_url.startswith('https://'):
+            vercel_url = f'https://{vercel_url}'
+        origins.append(vercel_url.rstrip('/'))
+
+    if not origins:
+        origins = ['http://localhost:5173', 'http://127.0.0.1:5173']
+
+    return list(dict.fromkeys(origins))
+
+
+CORS(app, origins=_build_cors_origins())
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///cybershield.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -76,6 +111,11 @@ class ScanResult(db.Model):
 
 with app.app_context():
     db.create_all()
+
+
+_ADVANCED_SCAN_LOCK = threading.Lock()
+_ADVANCED_SCAN_LAST_REQUEST = {}
+_ADVANCED_SCAN_MIN_INTERVAL_SECONDS = 3
 
 # Routes
 @app.route('/')
@@ -676,12 +716,41 @@ def api_dns_lookup():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/dns-lookup-pro', methods=['POST'])
+@app.route('/api/dns-lookup-pro', methods=['POST'])
+def api_dns_lookup_pro():
+    try:
+        data = request.get_json() or {}
+        target = data.get('target') or data.get('domain')
+        result = dns_lookup_pro(target)
+        if 'error' in result:
+            return jsonify(result), 400
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/subdomain-scan', methods=['POST'])
 def api_subdomain_scan():
     try:
         data = request.get_json() or {}
         domain = data.get('domain')
         result = subdomain_scan(domain)
+        if 'error' in result:
+            return jsonify(result), 400
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/subdomain-finder-pro', methods=['POST'])
+@app.route('/api/subdomain-finder-pro', methods=['POST'])
+def api_subdomain_finder_pro():
+    try:
+        data = request.get_json() or {}
+        target = data.get('target') or data.get('domain')
+        scan_mode = data.get('scan_mode', 'standard')
+        result = subdomain_finder_pro(target, scan_mode)
         if 'error' in result:
             return jsonify(result), 400
         return jsonify(result)
@@ -715,12 +784,76 @@ def api_service_detect():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/advanced-scan', methods=['POST'])
+@app.route('/api/advanced-scan', methods=['POST'])
+def api_advanced_scan():
+    try:
+        data = request.get_json() or {}
+        target = str(data.get('target', '')).strip()
+        scan_type = str(data.get('scan_type', 'quick')).strip().lower()
+        custom_range = str(data.get('custom_range', '')).strip()
+
+        if not target:
+            return jsonify({'error': 'Target is required.'}), 400
+
+        # Lightweight anti-spam throttle per client (best effort)
+        client = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+        client = client.split(',')[0].strip()
+        now = time.time()
+        with _ADVANCED_SCAN_LOCK:
+            last_seen = _ADVANCED_SCAN_LAST_REQUEST.get(client, 0)
+            if now - last_seen < _ADVANCED_SCAN_MIN_INTERVAL_SECONDS:
+                wait_for = int(_ADVANCED_SCAN_MIN_INTERVAL_SECONDS - (now - last_seen)) + 1
+                return jsonify({
+                    'error': f'Rate limit exceeded. Please wait {wait_for}s before scanning again.'
+                }), 429
+            _ADVANCED_SCAN_LAST_REQUEST[client] = now
+
+        result = advanced_network_scan(target, scan_type, custom_range)
+        if 'error' in result:
+            return jsonify(result), 400
+
+        # Save summary for history/debugging (best effort)
+        try:
+            scan_result = ScanResult(
+                scan_type='advanced_network_scan',
+                target=target,
+                result=str({
+                    'risk_level': result.get('risk_level'),
+                    'open_ports': result.get('open_ports'),
+                    'os_guess': result.get('os_guess'),
+                })
+            )
+            db.session.add(scan_result)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/header-analysis', methods=['POST'])
 def api_header_analysis():
     try:
         data = request.get_json() or {}
-        url = data.get('url')
-        result = header_analysis(url)
+        target = data.get('url') or data.get('target')
+        result = http_header_audit(target)
+        if 'error' in result:
+            return jsonify(result), 400
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/http-header-audit', methods=['POST'])
+@app.route('/api/http-header-audit', methods=['POST'])
+def api_http_header_audit():
+    try:
+        data = request.get_json() or {}
+        target = data.get('target') or data.get('url')
+        result = http_header_audit(target)
         if 'error' in result:
             return jsonify(result), 400
         return jsonify(result)
@@ -737,6 +870,286 @@ def api_tech_stack():
         if 'error' in result:
             return jsonify(result), 400
         return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/unified-recon', methods=['POST'])
+@app.route('/api/unified-recon', methods=['POST'])
+def api_unified_recon():
+    try:
+        data = request.get_json() or {}
+        target = data.get('target') or data.get('domain') or data.get('url')
+        scan_mode = data.get('scan_mode', 'standard')
+
+        result = unified_recon_scan(target, scan_mode)
+        if 'error' in result:
+            return jsonify(result), 400
+
+        # Save summary for traceability (best effort)
+        try:
+            scan_result = ScanResult(
+                scan_type='unified_recon',
+                target=str(result.get('target', target or '')),
+                result=str({
+                    'overall_score': result.get('overall_score'),
+                    'grade': result.get('grade'),
+                    'risk_level': result.get('risk_level'),
+                    'scan_mode': result.get('scan_mode'),
+                })
+            )
+            db.session.add(scan_result)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/download-unified-recon-pdf', methods=['POST'])
+def download_unified_recon_pdf():
+    if not REPORTLAB_AVAILABLE:
+        return jsonify({'error': 'PDF generation is not available. ReportLab library is not installed.'}), 503
+
+    try:
+        data = request.get_json() or {}
+        result = data.get('result') if isinstance(data.get('result'), dict) else None
+
+        if not result:
+            target = data.get('target') or data.get('domain') or data.get('url')
+            scan_mode = data.get('scan_mode', 'standard')
+            result = unified_recon_scan(target, scan_mode)
+
+        if not isinstance(result, dict):
+            return jsonify({'error': 'Invalid scan result payload.'}), 400
+
+        if 'error' in result:
+            return jsonify(result), 400
+
+        target = str(result.get('target', 'Unknown target'))
+        scan_mode = str(result.get('scan_mode', 'standard')).upper()
+        score = result.get('overall_score', 'N/A')
+        grade = result.get('grade', 'N/A')
+        risk_level = result.get('risk_level', 'N/A')
+        summary = str(result.get('summary', ''))
+        generated_at = str(result.get('generated_at', datetime.utcnow().isoformat()))
+
+        highlights = result.get('highlights', {}) if isinstance(result.get('highlights'), dict) else {}
+        issues = result.get('issues', []) if isinstance(result.get('issues'), list) else []
+        findings = result.get('findings', []) if isinstance(result.get('findings'), list) else []
+        recommendations = result.get('recommendations', []) if isinstance(result.get('recommendations'), list) else []
+        modules = result.get('modules', {}) if isinstance(result.get('modules'), dict) else {}
+        module_views = result.get('module_views', {}) if isinstance(result.get('module_views'), dict) else {}
+
+        pdf_buffer = BytesIO()
+        doc = SimpleDocTemplate(
+            pdf_buffer,
+            pagesize=A4,
+            rightMargin=36,
+            leftMargin=36,
+            topMargin=36,
+            bottomMargin=36,
+        )
+
+        styles = getSampleStyleSheet()
+        title_style = styles['Title']
+        heading_style = styles['Heading2']
+        body_style = styles['BodyText']
+
+        story = []
+        story.append(Paragraph('Unified Recon Scanner Report', title_style))
+        story.append(Spacer(1, 0.2 * inch))
+
+        summary_table = Table([
+            ['Target', html.escape(target)],
+            ['Scan Mode', html.escape(scan_mode)],
+            ['Overall Score', html.escape(str(score))],
+            ['Grade', html.escape(str(grade))],
+            ['Risk Level', html.escape(str(risk_level))],
+            ['Generated At', html.escape(generated_at)],
+        ], colWidths=[130, 380])
+        summary_table.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 0.3, colors.lightgrey),
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f5f7fb')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 0.15 * inch))
+
+        story.append(Paragraph('Executive Summary', heading_style))
+        story.append(Paragraph(html.escape(summary), body_style))
+        story.append(Spacer(1, 0.12 * inch))
+
+        story.append(Paragraph('Highlights', heading_style))
+        highlights_rows = [
+            ['Subdomains Found', html.escape(str(highlights.get('subdomains_found', 'N/A')))],
+            ['Open Ports', html.escape(', '.join(str(p) for p in highlights.get('open_ports', [])[:20]) or 'None')],
+            ['DNS Grade', html.escape(str(highlights.get('dns_grade', 'N/A')))],
+            ['Header Grade', html.escape(str(highlights.get('header_grade', 'N/A')))],
+            ['SSL Status', html.escape(str(highlights.get('ssl_status', 'N/A')))],
+            ['Technologies', html.escape(', '.join(highlights.get('tech', [])[:10]) or 'N/A')],
+        ]
+        highlights_table = Table(highlights_rows, colWidths=[130, 380])
+        highlights_table.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 0.3, colors.lightgrey),
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f5f7fb')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(highlights_table)
+        story.append(Spacer(1, 0.12 * inch))
+
+        story.append(Paragraph('Top Findings', heading_style))
+        if findings:
+            for finding in findings[:5]:
+                if not isinstance(finding, dict):
+                    continue
+                sev = html.escape(str(finding.get('severity', 'Low')))
+                title = html.escape(str(finding.get('title', 'Unnamed finding')))
+                detail = html.escape(str(finding.get('detail', '')))
+                points = html.escape(str(finding.get('points', '')))
+                line = f'• [{sev}] {title}'
+                if points:
+                    line += f' (impact {points})'
+                story.append(Paragraph(line, body_style))
+                if detail:
+                    story.append(Paragraph(f'  {detail}', body_style))
+        elif issues:
+            for issue in issues[:5]:
+                story.append(Paragraph(f'• {html.escape(str(issue))}', body_style))
+        else:
+            story.append(Paragraph('• No significant findings.', body_style))
+        story.append(Spacer(1, 0.1 * inch))
+
+        story.append(Paragraph('Priority Recommendations', heading_style))
+        if recommendations:
+            for rec in recommendations[:8]:
+                story.append(Paragraph(f'• {html.escape(str(rec))}', body_style))
+        else:
+            story.append(Paragraph('• No immediate action required.', body_style))
+        story.append(Spacer(1, 0.12 * inch))
+
+        story.append(Paragraph('Module Intelligence Summary', heading_style))
+        module_summary_rows = [['Module', 'Key Summary']]
+
+        dns_view = module_views.get('dns', {}) if isinstance(module_views.get('dns'), dict) else {}
+        if dns_view:
+            dns_line = (
+                f"Grade {dns_view.get('dns_grade', 'N/A')}, "
+                f"DNSSEC {'Enabled' if dns_view.get('dnssec_enabled') else 'Disabled'}, "
+                f"SPF {dns_view.get('spf_status', 'N/A')}, DMARC {dns_view.get('dmarc_policy', 'N/A')}"
+            )
+            module_summary_rows.append(['DNS Intelligence', html.escape(dns_line)])
+
+        sub_view = module_views.get('subdomains', {}) if isinstance(module_views.get('subdomains'), dict) else {}
+        if sub_view:
+            sub_line = (
+                f"Total {sub_view.get('total_found', 0)}, "
+                f"Live {sub_view.get('live_hosts', 0)}, "
+                f"High-Risk {sub_view.get('high_risk_hosts', 0)}"
+            )
+            module_summary_rows.append(['Subdomain Discovery', html.escape(sub_line)])
+
+        header_view = module_views.get('headers', {}) if isinstance(module_views.get('headers'), dict) else {}
+        if header_view:
+            header_line = (
+                f"Grade {header_view.get('header_grade', 'N/A')}, "
+                f"Missing headers {len(header_view.get('missing_security_headers', []) or [])}, "
+                f"HSTS {header_view.get('hsts_status', 'N/A')}"
+            )
+            module_summary_rows.append(['HTTP Header Audit', html.escape(header_line)])
+
+        ssl_view = module_views.get('ssl', {}) if isinstance(module_views.get('ssl'), dict) else {}
+        if ssl_view:
+            ssl_line = (
+                f"{'Valid' if ssl_view.get('valid') else 'Invalid'}, "
+                f"Issuer {ssl_view.get('issuer', 'N/A')}, "
+                f"Expires in {ssl_view.get('expires_in_days', 'N/A')} days"
+            )
+            module_summary_rows.append(['SSL Certificate', html.escape(ssl_line)])
+
+        ports_view = module_views.get('ports', {}) if isinstance(module_views.get('ports'), dict) else {}
+        if ports_view:
+            ports_line = (
+                f"Open ports {ports_view.get('open_ports_count', 0)}, "
+                f"Risky ports {ports_view.get('risky_ports_count', 0)}"
+            )
+            module_summary_rows.append(['Port Exposure', html.escape(ports_line)])
+
+        tech_view = module_views.get('tech', {}) if isinstance(module_views.get('tech'), dict) else {}
+        if tech_view:
+            tech_line = (
+                f"Frameworks {len(tech_view.get('frameworks', []) or [])}, "
+                f"CMS {len(tech_view.get('cms', []) or [])}, "
+                f"CDN {len(tech_view.get('cdn', []) or [])}"
+            )
+            module_summary_rows.append(['Technology Fingerprint', html.escape(tech_line)])
+
+        whois_view = module_views.get('whois', {}) if isinstance(module_views.get('whois'), dict) else {}
+        if whois_view:
+            whois_line = (
+                f"Registrar {whois_view.get('registrar', 'N/A')}, "
+                f"Age {whois_view.get('domain_age_days', 'N/A')} days, "
+                f"Expiry {whois_view.get('expiry_date', 'N/A')}"
+            )
+            module_summary_rows.append(['WHOIS Intelligence', html.escape(whois_line)])
+
+        if len(module_summary_rows) > 1:
+            module_summary_table = Table(module_summary_rows, colWidths=[130, 380])
+            module_summary_table.setStyle(TableStyle([
+                ('GRID', (0, 0), (-1, -1), 0.3, colors.lightgrey),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e3ecfb')),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ]))
+            story.append(module_summary_table)
+            story.append(Spacer(1, 0.12 * inch))
+
+        story.append(Paragraph('Module Status', heading_style))
+        module_rows = [['Module', 'Status', 'Duration (ms)', 'Error']]
+        for module_name, module_info in modules.items():
+            if not isinstance(module_info, dict):
+                continue
+            module_rows.append([
+                html.escape(str(module_name)),
+                'OK' if module_info.get('ok') else 'FAILED',
+                html.escape(str(module_info.get('duration_ms', 0))),
+                html.escape(str(module_info.get('error', '') or '-')),
+            ])
+
+        module_table = Table(module_rows, colWidths=[95, 60, 80, 275])
+        module_table.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 0.3, colors.lightgrey),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e3ecfb')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 5),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(module_table)
+
+        doc.build(story)
+        pdf_buffer.seek(0)
+        safe_name = re.sub(r'[^a-zA-Z0-9._-]+', '-', target)
+        return send_file(
+            pdf_buffer,
+            as_attachment=True,
+            download_name=f'unified-recon-{safe_name}.pdf',
+            mimetype='application/pdf'
+        )
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

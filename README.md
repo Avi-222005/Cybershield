@@ -182,3 +182,30 @@ Default local URLs:
 - Some external intel features depend on API keys and third-party service availability.
 - PDF generation routes using WeasyPrint are disabled automatically if WeasyPrint is not installed.
 - SQLite scan history is created automatically by Flask-SQLAlchemy on startup.
+
+## Render Deployment Checklist
+
+Before pushing to GitHub for auto-deploy:
+
+1. Backend dependencies
+- Ensure [requirements.txt](requirements.txt) is committed.
+- Install command on Render: pip install -r requirements.txt
+
+2. Backend start command
+- Use: gunicorn app:app
+
+3. Required environment variables (Render)
+- FLASK_SECRET_KEY
+- VIRUSTOTAL_API_KEY
+- WHOISXML_API_KEY
+- URLHAUS_AUTH_KEY
+
+4. CORS configuration
+- Set either CORS_ALLOWED_ORIGINS (comma-separated) or FRONTEND_URL.
+- The backend also auto-detects RENDER_EXTERNAL_URL and VERCEL_URL when available.
+
+5. Frontend build artifacts
+- Ensure [frontend/package.json](frontend/package.json) and [frontend/package-lock.json](frontend/package-lock.json) are committed so new tool dependencies install correctly.
+
+6. Frontend API base URL
+- In frontend env, set VITE_API_BASE_URL to your Render backend URL when frontend is hosted separately.

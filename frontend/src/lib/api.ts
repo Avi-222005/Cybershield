@@ -4,19 +4,25 @@ import type {
   SSLResult,
   WhoisResult,
   DNSLookupResult,
+  DNSLookupProResult,
   SubdomainScanResult,
+  SubdomainFinderProResult,
+  SubdomainScanMode,
   PortScanResult,
+  AdvancedScanResult,
   HeaderAnalysisResult,
   TechStackResult,
   EmailAnalyzerResult,
   EmailAnalyzerAdvancedResult,
+  UnifiedReconResult,
+  UnifiedReconScanMode,
 } from '../types'
 
 // Use environment variable for API base URL, fall back to relative path
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 const BASE = API_BASE_URL ? `${API_BASE_URL}/api` : '/api'
 
-async function post<T>(path: string, body: Record<string, string>): Promise<T> {
+async function post<T>(path: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -55,8 +61,14 @@ export const whoisLookup = (domain: string) =>
 export const dnsLookup = (domain: string) =>
   post<DNSLookupResult>('/dns-lookup', { domain })
 
+export const dnsLookupPro = (target: string) =>
+  post<DNSLookupProResult>('/dns-lookup-pro', { target })
+
 export const subdomainScan = (domain: string) =>
   post<SubdomainScanResult>('/subdomain-scan', { domain })
+
+export const subdomainFinderPro = (target: string, scan_mode: SubdomainScanMode = 'standard') =>
+  post<SubdomainFinderProResult>('/subdomain-finder-pro', { target, scan_mode })
 
 export const portScan = (target: string) =>
   post<PortScanResult>('/port-scan', { target })
@@ -64,8 +76,11 @@ export const portScan = (target: string) =>
 export const serviceDetect = (target: string) =>
   post<{ target: string; resolved_ip: string; services: Array<{ port: number; service: string; banner?: string | null }> }>('/service-detect', { target })
 
+export const advancedScan = (target: string, scan_type: 'quick' | 'full' | 'web' | 'custom', custom_range = '') =>
+  post<AdvancedScanResult>('/advanced-scan', { target, scan_type, custom_range })
+
 export const headerAnalysis = (url: string) =>
-  post<HeaderAnalysisResult>('/header-analysis', { url })
+  post<HeaderAnalysisResult>('/http-header-audit', { target: url })
 
 export const techStackAnalysis = (url: string) =>
   post<TechStackResult>('/tech-stack', { url })
@@ -75,3 +90,32 @@ export const emailHeaderAnalysis = (raw_header: string) =>
 
 export const emailHeaderAnalysisAdvanced = (raw_header: string) =>
   post<EmailAnalyzerAdvancedResult>('/email-analyzer-advanced', { raw_header })
+
+export const unifiedReconScan = (target: string, scan_mode: UnifiedReconScanMode = 'standard') =>
+  post<UnifiedReconResult>('/unified-recon', { target, scan_mode })
+
+export async function downloadUnifiedReconPdf(payload: {
+  result?: UnifiedReconResult
+  target?: string
+  scan_mode?: UnifiedReconScanMode
+}): Promise<Blob> {
+  const res = await fetch(`${BASE}/download-unified-recon-pdf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!res.ok) {
+    const text = await res.text()
+    let message = `Request failed (${res.status})`
+    try {
+      const parsed = JSON.parse(text)
+      message = parsed.error || message
+    } catch {
+      if (text) message = text
+    }
+    throw new Error(message)
+  }
+
+  return res.blob()
+}

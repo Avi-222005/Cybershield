@@ -201,6 +201,96 @@ export interface DNSLookupResult {
   }
 }
 
+export interface DNSLookupProResult {
+  target: string
+  normalized_domain: string
+  root_domain: string
+  grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'F'
+  score: number
+  dnssec: {
+    enabled: boolean
+    ds_present: boolean
+    dnskey_present: boolean
+    ds_records: string[]
+    dnskey_count: number
+  }
+  spf: {
+    present: boolean
+    record: string | null
+    policy: string
+    risk: string
+    includes: number
+    issues: string[]
+  }
+  dmarc: {
+    present: boolean
+    record: string | null
+    policy: string
+    enforcement: string
+    rua: string | null
+    ruf: string | null
+    pct: string | null
+    issues: string[]
+  }
+  dkim: {
+    status: string
+    selectors_found: string[]
+  }
+  mx: {
+    count: number
+    records: Array<{ priority: number; host: string }>
+    providers: string[]
+    issues: string[]
+  }
+  ns: {
+    count: number
+    records: string[]
+    providers: string[]
+    issues: string[]
+  }
+  caa: {
+    present: boolean
+    records: string[]
+    authorized_cas: string[]
+    issues: string[]
+  }
+  soa: {
+    present: boolean
+    record: {
+      primary_ns: string
+      responsible: string
+      serial: string
+      refresh: string
+      retry: string
+      expire: string
+      minimum: string
+    } | null
+    issues: string[]
+  }
+  infrastructure: {
+    provider_guess: string
+    a_count: number
+    aaaa_count: number
+    ptr_count: number
+  }
+  records: {
+    A: string[]
+    AAAA: string[]
+    CNAME: string[]
+    MX: string[]
+    NS: string[]
+    TXT: string[]
+    SOA: string[]
+    CAA: string[]
+    DMARC: string[]
+    SPF: string[]
+    PTR: string[]
+  }
+  issues: string[]
+  recommendations: string[]
+  generated_at: string
+}
+
 export interface SubdomainScanResult {
   domain: string
   count: number
@@ -208,6 +298,59 @@ export interface SubdomainScanResult {
     subdomain: string
     ip: string
   }>
+}
+
+export interface SubdomainFinderProHost {
+  host: string
+  ip: string | null
+  status: 'Live' | 'Dead' | 'Redirect' | 'Timeout'
+  http_code: number | null
+  title: string
+  server: string
+  tech: string[]
+  redirect?: boolean
+  final_url?: string
+  risk: 'LOW' | 'MEDIUM' | 'HIGH'
+  issues: string[]
+  sources: string[]
+  dns: {
+    a: string[]
+    aaaa: string[]
+    cname: string[]
+  }
+  takeover_possible: boolean
+}
+
+export type SubdomainScanMode = 'light' | 'standard' | 'deep'
+
+export interface HistoricalCandidate {
+  host: string
+  sources: string[]
+  risk: 'LOW' | 'MEDIUM' | 'HIGH'
+  issues: string[]
+  reason: string
+}
+
+export interface SubdomainFinderProResult {
+  target: string
+  scan_mode: SubdomainScanMode
+  grade: 'A+' | 'B' | 'C' | 'D' | 'F'
+  grade_label: string
+  score: number
+  sources_used: string[]
+  source_stats: Record<string, number>
+  total_found: number
+  validated: number
+  historical_unresolved: number
+  live_hosts: number
+  high_risk: number
+  wildcard_dns: boolean
+  subdomains: SubdomainFinderProHost[]
+  historical_candidates: HistoricalCandidate[]
+  recommendations: string[]
+  source_errors: Record<string, string>
+  cached: boolean
+  generated_at: string
 }
 
 export interface PortScanResult {
@@ -220,11 +363,81 @@ export interface PortScanResult {
   }>
 }
 
+export type AdvancedScanType = 'quick' | 'full' | 'web' | 'custom'
+
+export interface AdvancedPortResult {
+  port: number
+  status: 'open' | 'closed' | 'filtered'
+  service: string
+  banner?: string | null
+  product?: string | null
+  version?: string | null
+  risky: boolean
+  issue?: string | null
+}
+
+export interface AdvancedScanResult {
+  target: string
+  resolved_ip: string
+  scan_type: AdvancedScanType
+  ports_scanned: number
+  open_ports: number
+  closed_ports: number
+  filtered_ports: number
+  services: string[]
+  os_guess: string
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH'
+  issues: string[]
+  summary: string
+  warning: string
+  duration_ms: number
+  results: AdvancedPortResult[]
+  open_port_details: AdvancedPortResult[]
+}
+
 export interface HeaderAnalysisResult {
-  url: string
+  target: string
+  final_url: string
+  redirected_url: string | null
+  redirect_chain: string[]
+  protocol_used: string
   status_code: number
+  response_time_ms: number
+  grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'F'
+  score: number
+  https_enforced: boolean
+  headers_present: string[]
+  headers_missing: string[]
+  weak_headers: Array<{
+    header: string
+    reason: string
+    value: string
+  }>
+  security_headers: Array<{
+    header: string
+    status: 'Present' | 'Missing' | 'Weak'
+    notes: string
+  }>
+  cookies: Array<{
+    cookie_name: string
+    httponly: boolean
+    secure: boolean
+    samesite: string
+    session_cookie: boolean
+    long_expiry: boolean
+    risk: string
+  }>
+  cookie_risk_count: number
+  leaks: string[]
+  cache_security: {
+    cache_control: string
+    pragma: string
+    expires: string
+    issues: string[]
+  }
+  issues: string[]
+  recommendations: string[]
   headers: Record<string, string>
-  missing_security_headers: string[]
 }
 
 export interface TechStackResult {
@@ -287,4 +500,160 @@ export interface EmailAnalyzerAdvancedResult {
   issues: string[]
   risk_level: 'LOW' | 'MEDIUM' | 'HIGH'
   risk_score: number
+}
+
+export type UnifiedReconScanMode = 'quick' | 'standard' | 'deep'
+
+export interface UnifiedReconModuleResult {
+  ok: boolean
+  duration_ms: number
+  error: string | null
+  data: Record<string, any>
+}
+
+export interface UnifiedReconFinding {
+  module: string
+  severity: 'Critical' | 'High' | 'Medium' | 'Low'
+  title: string
+  detail: string
+  points: number
+}
+
+export interface UnifiedReconRiskDistribution {
+  critical: number
+  high: number
+  medium: number
+  low: number
+}
+
+export interface UnifiedReconModuleScore {
+  risk_score: number
+  weight: number
+  grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'F'
+  risk_level: 'Excellent' | 'Good' | 'Moderate' | 'Risky' | 'Critical'
+}
+
+export interface UnifiedReconDNSSummary {
+  dns_grade: string
+  dnssec_enabled: boolean
+  spf_status: 'Strong' | 'Weak' | 'Missing' | string
+  dmarc_policy: 'Reject' | 'Quarantine' | 'None' | 'Missing' | string
+  mx_count: number
+  ns_count: number
+  key_issues: string[]
+  recommendations: string[]
+}
+
+export interface UnifiedReconSubdomainRow {
+  host: string
+  status: string
+  risk: string
+  title: string
+}
+
+export interface UnifiedReconSubdomainSummary {
+  total_found: number
+  live_hosts: number
+  high_risk_hosts: number
+  top_risky_subdomains: UnifiedReconSubdomainRow[]
+  takeover_candidates: number
+  public_dev_hosts: number
+  key_issues: string[]
+  recommendations: string[]
+}
+
+export interface UnifiedReconHeadersSummary {
+  header_grade: string
+  missing_security_headers: string[]
+  cookie_security: string
+  cookie_risk_count: number
+  information_leakage: string[]
+  hsts_status: string
+  https_enforced: boolean
+  key_issues: string[]
+  recommendations: string[]
+}
+
+export interface UnifiedReconSSLSummary {
+  valid: boolean
+  status: string
+  issuer: string
+  expires_in_days: number
+  cipher_strength: string
+  key_issues: string[]
+  recommendations: string[]
+}
+
+export interface UnifiedReconPortServiceRow {
+  port: number
+  service: string
+  risk: 'Low' | 'Medium' | 'High' | string
+  notes: string
+}
+
+export interface UnifiedReconPortsSummary {
+  open_ports_count: number
+  risky_ports_count: number
+  services_table: UnifiedReconPortServiceRow[]
+  key_issues: string[]
+  recommendations: string[]
+}
+
+export interface UnifiedReconTechSummary {
+  server: string[]
+  frameworks: string[]
+  cms: string[]
+  cdn: string[]
+  language: string[]
+  all_technologies: string[]
+}
+
+export interface UnifiedReconWhoisSummary {
+  registrar: string
+  domain_age_days: number | null
+  expiry_date: string
+  registrant_country: string
+  recommendations: string[]
+}
+
+export interface UnifiedReconModuleViews {
+  dns?: UnifiedReconDNSSummary
+  subdomains?: UnifiedReconSubdomainSummary
+  headers?: UnifiedReconHeadersSummary
+  ssl?: UnifiedReconSSLSummary
+  ports?: UnifiedReconPortsSummary
+  tech?: UnifiedReconTechSummary
+  whois?: UnifiedReconWhoisSummary
+}
+
+export interface UnifiedReconHighlights {
+  subdomains_found: number
+  open_ports: number[]
+  dns_grade: string
+  header_grade: string
+  ssl_status: string
+  tech: string[]
+}
+
+export interface UnifiedReconResult {
+  target: string
+  normalized_domain: string | null
+  scan_mode: UnifiedReconScanMode
+  overall_score: number
+  risk_score: number
+  grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'F'
+  grade_label: string
+  risk_level: 'Excellent' | 'Good' | 'Moderate' | 'Risky' | 'Critical'
+  summary: string
+  highlights: UnifiedReconHighlights
+  issues: string[]
+  findings: UnifiedReconFinding[]
+  recommendations: string[]
+  risk_distribution: UnifiedReconRiskDistribution
+  module_scores: Record<string, UnifiedReconModuleScore>
+  module_views: UnifiedReconModuleViews
+  modules: Record<string, UnifiedReconModuleResult>
+  scan_duration_ms: number
+  cached: boolean
+  generated_at: string
 }

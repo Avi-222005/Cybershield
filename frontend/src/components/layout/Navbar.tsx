@@ -16,12 +16,19 @@ import {
   FileCode2,
   Brain,
   MailSearch,
+  Radar,
+  Fingerprint,
+  KeyRound,
+  Binary,
+  FileJson2,
+  FileDigit,
+  QrCode,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { cn } from '../../lib/utils'
 import { useTheme } from '../../context/ThemeContext'
 
-type NavItem = { to: string; label: string; icon: ElementType }
+type NavItem = { to: string; label: string; icon: ElementType; section?: string }
 
 const threatItems: NavItem[] = [
   { to: '/phishing-checker', label: 'URL Phishing Checker', icon: Globe },
@@ -31,12 +38,22 @@ const threatItems: NavItem[] = [
 ]
 
 const reconItems: NavItem[] = [
+  { to: '/unified-recon', label: 'Unified Recon Scanner', icon: Radar },
   { to: '/tech-stack-analyzer', label: 'Tech Stack Analyzer', icon: Brain },
   { to: '/dns-lookup', label: 'DNS Lookup', icon: Network },
   { to: '/subdomain-finder', label: 'Subdomain Finder', icon: SearchCheck },
   { to: '/port-scanner', label: 'Port & Service Scanner', icon: ScanLine },
   { to: '/http-header-analyzer', label: 'HTTP Header Analyzer', icon: FileCode2 },
   { to: '/email-header-analyzer', label: 'Email Header Analyzer', icon: MailSearch },
+]
+
+const toolsItems: NavItem[] = [
+  { to: '/tools/hash-generator', label: 'Hash Generator', icon: FileDigit, section: 'Cryptography' },
+  { to: '/tools/hash-identifier', label: 'Hash Identifier', icon: Fingerprint, section: 'Cryptography' },
+  { to: '/tools/password-generator', label: 'Password Generator', icon: KeyRound, section: 'Cryptography' },
+  { to: '/tools/base64', label: 'Base64 Tool', icon: Binary, section: 'Encoding' },
+  { to: '/tools/jwt-decoder', label: 'JWT Decoder', icon: FileJson2, section: 'Encoding' },
+  { to: '/tools/qr-generator', label: 'QR Generator', icon: QrCode, section: 'Encoding' },
 ]
 
 function Dropdown({
@@ -53,6 +70,14 @@ function Dropdown({
   pathname: string
 }) {
   const isGroupActive = items.some((i) => i.to === pathname)
+  const sectionOrder = Array.from(new Set(items.map((item) => item.section).filter(Boolean))) as string[]
+  const groupedItems = sectionOrder.length
+    ? sectionOrder.map((section) => ({
+        section,
+        items: items.filter((item) => item.section === section),
+      }))
+    : [{ section: null, items }]
+
   return (
     <div className="relative">
       <button
@@ -74,22 +99,27 @@ function Dropdown({
             transition={{ duration: 0.16 }}
             className="absolute left-0 top-full mt-2 w-72 glass-card rounded-xl border border-white/10 p-1 z-50"
           >
-            {items.map(({ to, label: itemLabel, icon: Icon }) => {
-              const active = pathname === to
-              return (
-                <Link
-                  key={to}
-                  to={to}
-                  className={cn(
-                    'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors',
-                    active ? 'text-[#0d6efd] bg-[#0d6efd]/10' : 'text-gray-300 hover:text-white hover:bg-white/5',
-                  )}
-                >
-                  <Icon size={15} />
-                  {itemLabel}
-                </Link>
-              )
-            })}
+            {groupedItems.map((group) => (
+              <div key={group.section || 'general'} className="mb-1.5 last:mb-0">
+                {group.section && <div className="px-3 py-1 text-[11px] text-gray-500 font-mono uppercase tracking-wider">{group.section}</div>}
+                {group.items.map(({ to, label: itemLabel, icon: Icon }) => {
+                  const active = pathname === to
+                  return (
+                    <Link
+                      key={to}
+                      to={to}
+                      className={cn(
+                        'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors',
+                        active ? 'text-[#0d6efd] bg-[#0d6efd]/10' : 'text-gray-300 hover:text-white hover:bg-white/5',
+                      )}
+                    >
+                      <Icon size={15} />
+                      {itemLabel}
+                    </Link>
+                  )
+                })}
+              </div>
+            ))}
           </motion.div>
         )}
       </AnimatePresence>
@@ -100,8 +130,8 @@ function Dropdown({
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
-  const [openDesktop, setOpenDesktop] = useState<'threat' | 'recon' | null>(null)
-  const [openMobile, setOpenMobile] = useState<'threat' | 'recon' | null>(null)
+  const [openDesktop, setOpenDesktop] = useState<'threat' | 'recon' | 'tools' | null>(null)
+  const [openMobile, setOpenMobile] = useState<'threat' | 'recon' | 'tools' | null>(null)
   const location = useLocation()
   const { theme, toggleTheme } = useTheme()
   const ref = useRef<HTMLDivElement | null>(null)
@@ -167,6 +197,13 @@ export default function Navbar() {
             items={reconItems}
             open={openDesktop === 'recon'}
             setOpen={(v) => setOpenDesktop(v ? 'recon' : null)}
+            pathname={pathname}
+          />
+          <Dropdown
+            label="Tools"
+            items={toolsItems}
+            open={openDesktop === 'tools'}
+            setOpen={(v) => setOpenDesktop(v ? 'tools' : null)}
             pathname={pathname}
           />
         </div>
@@ -243,6 +280,33 @@ export default function Navbar() {
                         <Icon size={15} />
                         {label}
                       </Link>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <button
+                onClick={() => setOpenMobile((v) => (v === 'tools' ? null : 'tools'))}
+                className="w-full px-3 py-2 rounded-lg text-sm font-medium text-gray-300 hover:bg-white/5 flex items-center justify-between"
+              >
+                Tools
+                <ChevronDown size={14} className={cn('transition-transform', openMobile === 'tools' && 'rotate-180')} />
+              </button>
+              <AnimatePresence>
+                {openMobile === 'tools' && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden pl-2">
+                    {Array.from(new Set(toolsItems.map((item) => item.section).filter(Boolean))).map((section) => (
+                      <div key={section} className="mb-1.5">
+                        <div className="px-3 py-1 text-[11px] text-gray-500 font-mono uppercase tracking-wider">{section}</div>
+                        {toolsItems
+                          .filter((item) => item.section === section)
+                          .map(({ to, label, icon: Icon }) => (
+                            <Link key={to} to={to} className={cn('flex items-center gap-2 px-3 py-2 rounded-lg text-sm', pathname === to ? 'text-[#0d6efd] bg-[#0d6efd]/10' : 'text-gray-400 hover:bg-white/5')}>
+                              <Icon size={15} />
+                              {label}
+                            </Link>
+                          ))}
+                      </div>
                     ))}
                   </motion.div>
                 )}
