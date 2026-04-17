@@ -3,6 +3,7 @@ import json
 import threading
 import time
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -22,6 +23,9 @@ from .whois_service import get_whois_info
 UNIFIED_RECON_CACHE_TTL_SECONDS = 300
 _UNIFIED_RECON_CACHE_LOCK = threading.Lock()
 _UNIFIED_RECON_CACHE: Dict[str, Dict[str, Any]] = {}
+UNIFIED_RECON_JOB_TTL_SECONDS = 900
+_UNIFIED_RECON_JOB_LOCK = threading.Lock()
+_UNIFIED_RECON_JOBS: Dict[str, Dict[str, Any]] = {}
 
 MODULE_WEIGHTS = {
     "dns": 20,
@@ -824,64 +828,119 @@ def _compute_unified_risk(
     }
 
 
-def unified_recon_scan(target_input: str, scan_mode: str = "standard") -> Dict[str, Any]:
-    target = str(target_input or "").strip()
-    if not target:
-        return {"error": "Target is required."}
+def _job_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-    mode = str(scan_mode or "standard").strip().lower()
-    if mode not in ("quick", "standard", "deep"):
-        mode = "standard"
 
-    cache_key = f"{target.lower()}::{mode}"
-    cached = _cache_get(cache_key)
-    if cached:
-        cached["cached"] = True
-        return cached
+def _normalize_module_result(module_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    data = json.loads(json.dumps(module_result if isinstance(module_result, dict) else {}))
+    state = str(data.get("state", "")).lower()
+    if state not in ("pending", "running", "ok", "error"):
+        state = "ok" if bool(data.get("ok")) else "error"
 
+    data["state"] = state
+    data["ok"] = bool(data.get("ok", state == "ok"))
+    data["duration_ms"] = _safe_int(data.get("duration_ms"), 0)
+    data["error"] = data.get("error")
+    raw_payload = data.get("data")
+    data["data"] = raw_payload if isinstance(raw_payload, dict) else {}
+    return data
+
+
+def _normalize_modules_map(modules: Any) -> Dict[str, Dict[str, Any]]:
+    normalized: Dict[str, Dict[str, Any]] = {}
+    if not isinstance(modules, dict):
+        return normalized
+    for key, value in modules.items():
+        normalized[str(key)] = _normalize_module_result(value if isinstance(value, dict) else {})
+    return normalized
+
+
+def _cleanup_finished_jobs() -> None:
+    cutoff = time.time() - UNIFIED_RECON_JOB_TTL_SECONDS
+    with _UNIFIED_RECON_JOB_LOCK:
+        stale_job_ids = []
+        for job_id, job in _UNIFIED_RECON_JOBS.items():
+            status = str(job.get("status", ""))
+            finished_at_epoch = float(job.get("finished_at_epoch", 0) or 0)
+            if status in ("completed", "failed") and finished_at_epoch and finished_at_epoch < cutoff:
+                stale_job_ids.append(job_id)
+
+        for job_id in stale_job_ids:
+            _UNIFIED_RECON_JOBS.pop(job_id, None)
+
+
+def _build_task_map(target: str, mode: str, domain: Optional[str], web_target: str) -> Dict[str, Any]:
+    if mode == "quick":
+        return {
+            "dns": (lambda: dns_lookup(domain)) if domain else (lambda: {"error": "DNS summary requires a domain target."}),
+            "headers": lambda: http_header_audit(web_target),
+            "ssl": (lambda: check_ssl_certificate(domain)) if domain else (lambda: {"error": "SSL scan requires a domain target."}),
+            "ports": lambda: advanced_network_scan(target, "quick", ""),
+        }
+
+    return {
+        "dns": (lambda: dns_lookup_pro(domain)) if domain else (lambda: {"error": "DNS audit requires a domain target."}),
+        "subdomains": (
+            (lambda: subdomain_finder_pro(domain, "deep" if mode == "deep" else "standard"))
+            if domain
+            else (lambda: {"error": "Subdomain discovery requires a domain target."})
+        ),
+        "headers": lambda: http_header_audit(web_target),
+        "ssl": (lambda: check_ssl_certificate(domain)) if domain else (lambda: {"error": "SSL scan requires a domain target."}),
+        "ports": lambda: advanced_network_scan(target, "quick" if mode == "standard" else "full", ""),
+        "tech": lambda: analyze_tech_stack(web_target),
+        "whois": (lambda: get_whois_info(domain)) if domain else (lambda: {"error": "WHOIS requires a domain target."}),
+    }
+
+
+def _execute_unified_recon_scan(
+    target: str,
+    mode: str,
+    on_module_update=None,
+) -> Dict[str, Any]:
     started = time.perf_counter()
 
     is_ip = _is_ip_target(target)
     domain = None if is_ip else normalize_domain_input(target)
     web_target = _normalize_web_target(target)
-
-    tasks: Dict[str, Any] = {
-        "headers": lambda: http_header_audit(web_target),
-        "ports": lambda: advanced_network_scan(target, "quick" if mode in ("quick", "standard") else "full", ""),
-    }
-
-    if mode == "quick":
-        tasks["dns"] = (lambda: dns_lookup(domain)) if domain else (lambda: {"error": "DNS summary requires a domain target."})
-        tasks["ssl"] = (lambda: check_ssl_certificate(domain)) if domain else (lambda: {"error": "SSL scan requires a domain target."})
-    else:
-        tasks["dns"] = (lambda: dns_lookup_pro(domain)) if domain else (lambda: {"error": "DNS audit requires a domain target."})
-        tasks["ssl"] = (lambda: check_ssl_certificate(domain)) if domain else (lambda: {"error": "SSL scan requires a domain target."})
-        tasks["subdomains"] = (
-            (lambda: subdomain_finder_pro(domain, "deep" if mode == "deep" else "standard"))
-            if domain
-            else (lambda: {"error": "Subdomain discovery requires a domain target."})
-        )
-        tasks["tech"] = lambda: analyze_tech_stack(web_target)
-        tasks["whois"] = (lambda: get_whois_info(domain)) if domain else (lambda: {"error": "WHOIS requires a domain target."})
+    tasks = _build_task_map(target, mode, domain, web_target)
 
     modules: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=min(8, max(1, len(tasks)))) as executor:
-        future_map = {executor.submit(_run_module, name, fn): name for name, fn in tasks.items()}
+        future_map = {}
+        for name, fn in tasks.items():
+            if callable(on_module_update):
+                running_state = _module_result(False, 0, data={}, error=None)
+                running_state["state"] = "running"
+                on_module_update(name, running_state)
+            future_map[executor.submit(_run_module, name, fn)] = name
+
         for future in as_completed(future_map):
             module_name = future_map[future]
             try:
-                name, result = future.result()
-                modules[name] = result
+                _name, result = future.result()
             except Exception as exc:
-                modules[module_name] = _module_result(
+                result = _module_result(
                     False,
                     0,
                     data={"traceback": traceback.format_exc(limit=4)},
                     error=str(exc),
                 )
 
+            result = _normalize_module_result(result)
+            result["state"] = "ok" if result.get("ok") else "error"
+            modules[module_name] = result
+            if callable(on_module_update):
+                on_module_update(module_name, result)
+
     for key in tasks:
-        modules.setdefault(key, _module_result(False, 0, data={}, error="Module did not return results."))
+        if key not in modules:
+            missing = _module_result(False, 0, data={}, error="Module did not return results.")
+            missing["state"] = "error"
+            modules[key] = _normalize_module_result(missing)
+            if callable(on_module_update):
+                on_module_update(key, modules[key])
 
     risk = _compute_unified_risk(target, mode, modules)
 
@@ -903,10 +962,208 @@ def unified_recon_scan(target_input: str, scan_mode: str = "standard") -> Dict[s
         "module_scores": risk["module_scores"],
         "module_views": risk["module_views"],
         "modules": modules,
+        "module_order": list(tasks.keys()),
         "scan_duration_ms": int((time.perf_counter() - started) * 1000),
         "cached": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    return response
 
+
+def _job_payload(job: Dict[str, Any], include_result: bool = False) -> Dict[str, Any]:
+    payload = {
+        "job_id": str(job.get("job_id", "")),
+        "status": str(job.get("status", "running")),
+        "target": str(job.get("target", "")),
+        "scan_mode": str(job.get("scan_mode", "standard")),
+        "started_at": str(job.get("started_at", "")),
+        "updated_at": str(job.get("updated_at", "")),
+        "module_order": list(job.get("module_order", [])),
+        "total_modules": _safe_int(job.get("total_modules"), 0),
+        "completed_modules": _safe_int(job.get("completed_modules"), 0),
+        "modules": _normalize_modules_map(job.get("modules", {})),
+    }
+
+    error_text = job.get("error")
+    if error_text:
+        payload["error"] = str(error_text)
+
+    if include_result and isinstance(job.get("result"), dict):
+        payload["result"] = json.loads(json.dumps(job.get("result")))
+
+    return payload
+
+
+def _run_unified_recon_job_worker(job_id: str, target: str, mode: str, cache_key: str) -> None:
+    def on_module_update(module_name: str, module_result: Dict[str, Any]) -> None:
+        with _UNIFIED_RECON_JOB_LOCK:
+            job = _UNIFIED_RECON_JOBS.get(job_id)
+            if not job:
+                return
+
+            modules = job.get("modules", {})
+            if not isinstance(modules, dict):
+                modules = {}
+                job["modules"] = modules
+
+            modules[module_name] = _normalize_module_result(module_result)
+            completed = sum(
+                1 for item in modules.values() if str(item.get("state", "")).lower() in ("ok", "error")
+            )
+            job["completed_modules"] = completed
+            job["updated_at"] = _job_timestamp()
+
+    try:
+        result = _execute_unified_recon_scan(target, mode, on_module_update=on_module_update)
+        _cache_set(cache_key, result)
+
+        with _UNIFIED_RECON_JOB_LOCK:
+            job = _UNIFIED_RECON_JOBS.get(job_id)
+            if not job:
+                return
+
+            normalized_modules = _normalize_modules_map(result.get("modules", {}))
+            module_order = result.get("module_order", [])
+            job["modules"] = normalized_modules
+            job["module_order"] = list(module_order) if isinstance(module_order, list) else list(normalized_modules.keys())
+            job["total_modules"] = len(job["module_order"])
+            job["completed_modules"] = sum(
+                1 for item in normalized_modules.values() if str(item.get("state", "")).lower() in ("ok", "error")
+            )
+            job["status"] = "completed"
+            job["result"] = result
+            job["error"] = None
+            job["updated_at"] = _job_timestamp()
+            job["finished_at_epoch"] = time.time()
+    except Exception as exc:
+        with _UNIFIED_RECON_JOB_LOCK:
+            job = _UNIFIED_RECON_JOBS.get(job_id)
+            if not job:
+                return
+            job["status"] = "failed"
+            job["error"] = str(exc)
+            job["updated_at"] = _job_timestamp()
+            job["finished_at_epoch"] = time.time()
+
+
+def unified_recon_scan(target_input: str, scan_mode: str = "standard") -> Dict[str, Any]:
+    target = str(target_input or "").strip()
+    if not target:
+        return {"error": "Target is required."}
+
+    mode = str(scan_mode or "standard").strip().lower()
+    if mode not in ("quick", "standard", "deep"):
+        mode = "standard"
+
+    cache_key = f"{target.lower()}::{mode}"
+    cached = _cache_get(cache_key)
+    if cached:
+        cached["cached"] = True
+        cached["modules"] = _normalize_modules_map(cached.get("modules", {}))
+        return cached
+
+    response = _execute_unified_recon_scan(target, mode)
     _cache_set(cache_key, response)
     return response
+
+
+def start_unified_recon_job(target_input: str, scan_mode: str = "standard") -> Dict[str, Any]:
+    target = str(target_input or "").strip()
+    if not target:
+        return {"error": "Target is required."}
+
+    mode = str(scan_mode or "standard").strip().lower()
+    if mode not in ("quick", "standard", "deep"):
+        mode = "standard"
+
+    _cleanup_finished_jobs()
+    cache_key = f"{target.lower()}::{mode}"
+    cached = _cache_get(cache_key)
+
+    if cached:
+        cached["cached"] = True
+        normalized_cached_modules = _normalize_modules_map(cached.get("modules", {}))
+        module_order = cached.get("module_order") if isinstance(cached.get("module_order"), list) else list(normalized_cached_modules.keys())
+        if not module_order:
+            module_order = list(normalized_cached_modules.keys())
+
+        job_id = uuid.uuid4().hex
+        completed_job = {
+            "job_id": job_id,
+            "status": "completed",
+            "target": target,
+            "scan_mode": mode,
+            "started_at": _job_timestamp(),
+            "updated_at": _job_timestamp(),
+            "module_order": module_order,
+            "modules": normalized_cached_modules,
+            "total_modules": len(module_order),
+            "completed_modules": len(module_order),
+            "result": cached,
+            "error": None,
+            "finished_at_epoch": time.time(),
+        }
+
+        with _UNIFIED_RECON_JOB_LOCK:
+            _UNIFIED_RECON_JOBS[job_id] = completed_job
+
+        return _job_payload(completed_job, include_result=True)
+
+    is_ip = _is_ip_target(target)
+    domain = None if is_ip else normalize_domain_input(target)
+    web_target = _normalize_web_target(target)
+    task_map = _build_task_map(target, mode, domain, web_target)
+    module_order = list(task_map.keys())
+    modules = {
+        key: {
+            "ok": False,
+            "duration_ms": 0,
+            "error": None,
+            "data": {},
+            "state": "pending",
+        }
+        for key in module_order
+    }
+
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "status": "running",
+        "target": target,
+        "scan_mode": mode,
+        "started_at": _job_timestamp(),
+        "updated_at": _job_timestamp(),
+        "module_order": module_order,
+        "modules": modules,
+        "total_modules": len(module_order),
+        "completed_modules": 0,
+        "result": None,
+        "error": None,
+        "finished_at_epoch": 0,
+    }
+
+    with _UNIFIED_RECON_JOB_LOCK:
+        _UNIFIED_RECON_JOBS[job_id] = job
+
+    worker = threading.Thread(
+        target=_run_unified_recon_job_worker,
+        args=(job_id, target, mode, cache_key),
+        daemon=True,
+    )
+    worker.start()
+
+    return _job_payload(job)
+
+
+def get_unified_recon_job(job_id: str) -> Dict[str, Any]:
+    key = str(job_id or "").strip()
+    if not key:
+        return {"error": "Job id is required."}
+
+    with _UNIFIED_RECON_JOB_LOCK:
+        job = _UNIFIED_RECON_JOBS.get(key)
+        if not job:
+            return {"error": "Unified recon job not found."}
+
+        include_result = str(job.get("status", "")).lower() == "completed"
+        return _job_payload(job, include_result=include_result)

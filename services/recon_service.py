@@ -231,6 +231,9 @@ SUBDOMAIN_TAKEOVER_FINGERPRINTS = [
     "No settings were found for this company",
 ]
 
+SUBDOMAIN_GENERATED_SOURCES = {"wordlist", "mutation"}
+SUBDOMAIN_PASSIVE_SOURCES = {"crt.sh", "OTX", "HackerTarget", "JS", "reverse-dns"}
+
 OTX_API_KEY = os.getenv("OTX_API_KEY")
 
 
@@ -1470,6 +1473,37 @@ def _check_wildcard_dns(root_domain: str) -> bool:
     )
 
 
+def _dns_record_fingerprint(a_records: List[str], aaaa_records: List[str], cname_records: List[str]) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
+    def normalize(values: List[str]) -> Tuple[str, ...]:
+        cleaned = []
+        for value in values or []:
+            text = str(value).strip().lower().rstrip(".")
+            if text:
+                cleaned.append(text)
+        return tuple(sorted(set(cleaned)))
+
+    return (normalize(a_records), normalize(aaaa_records), normalize(cname_records))
+
+
+def _collect_wildcard_dns_fingerprints(root_domain: str, sample_count: int = 3) -> Set[Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]]:
+    fingerprints: Set[Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]] = set()
+    if dns is None:
+        return fingerprints
+
+    resolver = _dns_make_resolver()
+    for _ in range(max(1, sample_count)):
+        random_label = "".join(random.choices(string.ascii_lowercase + string.digits, k=18))
+        probe_host = f"{random_label}.{root_domain}"
+        a_records = _resolve_dns_records(resolver, probe_host, "A")
+        aaaa_records = _resolve_dns_records(resolver, probe_host, "AAAA")
+        cname_records = _resolve_dns_records(resolver, probe_host, "CNAME")
+
+        if a_records or aaaa_records or cname_records:
+            fingerprints.add(_dns_record_fingerprint(a_records, aaaa_records, cname_records))
+
+    return fingerprints
+
+
 def _validate_subdomain(host: str) -> Dict[str, Any]:
     resolver = _dns_make_resolver()
     a_records = _resolve_dns_records(resolver, host, "A")
@@ -1769,7 +1803,8 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
     config = SUBDOMAIN_SCAN_MODE_CONFIG[mode]
 
     root_domain = normalized["root_domain"]
-    cache_key = f"{root_domain}:{mode}"
+    wildcard_dns = _check_wildcard_dns(root_domain)
+    cache_key = f"v2:{root_domain}:{mode}"
     cached = _subdomain_cache_get(cache_key)
     if cached:
         cached["cached"] = True
@@ -1823,7 +1858,7 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
 
     include_historical = bool(config["include_historical"])
 
-    if config["use_wordlist"]:
+    if config["use_wordlist"] and not wildcard_dns:
         resolved, unresolved, discovery_error = _discover_subdomains_wordlist(
             root_domain=root_domain,
             wordlist_size=int(config["wordlist_size"]),
@@ -1832,9 +1867,11 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
         source_host_map["wordlist"] = resolved
         if discovery_error:
             source_errors["wordlist"] = discovery_error
+    elif config["use_wordlist"] and wildcard_dns:
+        source_errors["wordlist"] = "Skipped active wordlist expansion because wildcard DNS is enabled for this target."
 
     observed_hosts = set().union(*source_host_map.values()) if source_host_map else set()
-    if config["use_mutation"]:
+    if config["use_mutation"] and not wildcard_dns:
         resolved, unresolved, discovery_error = _discover_subdomains_mutation(
             root_domain=root_domain,
             observed_hosts=observed_hosts,
@@ -1844,6 +1881,8 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
         source_host_map["mutation"] = resolved
         if discovery_error:
             source_errors["mutation"] = discovery_error
+    elif config["use_mutation"] and wildcard_dns:
+        source_errors["mutation"] = "Skipped mutation engine because wildcard DNS is enabled for this target."
 
     if config["use_reverse_hints"]:
         reverse_hosts, reverse_error = _discover_subdomains_reverse_hints(root_domain)
@@ -1911,6 +1950,8 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
                     "body": "",
                 }
 
+    wildcard_fingerprints = _collect_wildcard_dns_fingerprints(root_domain) if wildcard_dns else set()
+
     subdomain_rows: List[Dict[str, Any]] = []
     high_risk = 0
     live_hosts = 0
@@ -1920,6 +1961,9 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
 
     for row in validated_rows:
         host = row["host"]
+        host_sources = sorted(merged_source_tags.get(host, set()))
+        host_source_set = set(host_sources)
+
         live_data = liveness_map.get(
             host,
             {
@@ -1932,6 +1976,22 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
                 "body": "",
             },
         )
+
+        if wildcard_dns and wildcard_fingerprints:
+            host_fp = _dns_record_fingerprint(
+                row.get("a_records", []),
+                row.get("aaaa_records", []),
+                row.get("cname_records", []),
+            )
+            generated_only = bool(host_source_set & SUBDOMAIN_GENERATED_SOURCES) and not bool(host_source_set & SUBDOMAIN_PASSIVE_SOURCES)
+            likely_wildcard_false_positive = (
+                generated_only
+                and host_fp in wildcard_fingerprints
+                and live_data.get("status") in ("Dead", "Timeout")
+                and live_data.get("http_code") in (None, 404, 410)
+            )
+            if likely_wildcard_false_positive:
+                continue
 
         takeover_issues = _check_subdomain_takeover(row.get("cname_records", []), live_data.get("body", ""))
         risk, risk_issues = _classify_subdomain_risk(host, live_data.get("title", ""), takeover_issues)
@@ -1961,7 +2021,7 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
                 "final_url": live_data.get("final_url", ""),
                 "risk": risk,
                 "issues": issues,
-                "sources": sorted(merged_source_tags.get(host, set())),
+                "sources": host_sources,
                 "dns": {
                     "a": row.get("a_records", []),
                     "aaaa": row.get("aaaa_records", []),
@@ -1991,10 +2051,9 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
 
     historical_candidates.sort(key=lambda x: ({"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(x["risk"], 3), x["host"]))
 
-    wildcard_dns = _check_wildcard_dns(root_domain)
     grade, score, grade_label = _subdomain_grade_with_context(
         total_found=len(all_hosts),
-        validated=len(validated_rows),
+        validated=len(subdomain_rows),
         live_hosts=live_hosts,
         high_risk=high_risk,
         takeover_count=takeover_count,
@@ -2029,13 +2088,13 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
         "sources_used": used_sources,
         "source_stats": source_stats,
         "total_found": len(all_hosts),
-        "validated": len(validated_rows),
+        "validated": len(subdomain_rows),
         "historical_unresolved": len(unresolved_rows),
         "live_hosts": live_hosts,
         "high_risk": high_risk,
         "wildcard_dns": wildcard_dns,
         "subdomains": subdomain_rows,
-        "historical_candidates": historical_candidates[:500] if include_historical else [],
+        "historical_candidates": historical_candidates[:500],
         "recommendations": recommendations,
         "source_errors": source_errors,
         "cached": False,

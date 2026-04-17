@@ -54,6 +54,8 @@ from services import (
     analyze_email_header,
     analyze_email_header_advanced,
     unified_recon_scan,
+    start_unified_recon_job,
+    get_unified_recon_job,
 )
 from phishing_detector import analyze_url_for_phishing
 from ip_analyzer import analyze_ip_hybrid
@@ -861,12 +863,15 @@ def api_http_header_audit():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/tech-stack', methods=['POST'])
 @app.route('/api/tech-stack', methods=['POST'])
+@app.route('/tech-stack-detect', methods=['POST'])
+@app.route('/api/tech-stack-detect', methods=['POST'])
 def api_tech_stack():
     try:
         data = request.get_json() or {}
-        url = data.get('url')
-        result = analyze_tech_stack(url)
+        target = data.get('target') or data.get('url') or data.get('domain')
+        result = analyze_tech_stack(target)
         if 'error' in result:
             return jsonify(result), 400
         return jsonify(result)
@@ -903,6 +908,34 @@ def api_unified_recon():
         except Exception:
             db.session.rollback()
 
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/unified-recon/start', methods=['POST'])
+@app.route('/api/unified-recon/start', methods=['POST'])
+def api_unified_recon_start():
+    try:
+        data = request.get_json() or {}
+        target = data.get('target') or data.get('domain') or data.get('url')
+        scan_mode = data.get('scan_mode', 'standard')
+
+        result = start_unified_recon_job(target, scan_mode)
+        if 'error' in result:
+            return jsonify(result), 400
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/unified-recon/status/<job_id>', methods=['GET'])
+@app.route('/api/unified-recon/status/<job_id>', methods=['GET'])
+def api_unified_recon_status(job_id):
+    try:
+        result = get_unified_recon_job(job_id)
+        if 'error' in result:
+            return jsonify(result), 404
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500

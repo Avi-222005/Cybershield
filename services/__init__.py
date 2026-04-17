@@ -6,7 +6,7 @@ from .formatters import format_ip_reputation_details_for_pdf
 from .recon_service import dns_lookup, dns_lookup_pro, subdomain_scan, subdomain_finder_pro, port_scan, service_detection, advanced_network_scan, header_analysis, http_header_audit
 from .tech_stack_service import analyze_tech_stack
 from .email_header_service import analyze_email_header, analyze_email_header_advanced
-from .unified_recon_service import unified_recon_scan
+from .unified_recon_service import unified_recon_scan, start_unified_recon_job, get_unified_recon_job
 
 __all__ = [
     "normalize_domain_input",
@@ -31,4 +31,6 @@ __all__ = [
     "analyze_email_header",
     "analyze_email_header_advanced",
     "unified_recon_scan",
+    "start_unified_recon_job",
+    "get_unified_recon_job",
 ]
