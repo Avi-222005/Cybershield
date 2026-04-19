@@ -178,8 +178,20 @@ export interface WhoisResult {
   expiresDate: string
   registrarName: string
   registrarIANAID: string
+  registrarURL?: string
   whoisServer: string
+  dnssec?: string
+  privacyProtection?: string
+  lookupSources?: string[]
+  lookupNotes?: string[]
+  ips?: string[]
   nameServers: string[]
+  nameServerIPs?: Record<string, string[]>
+  domainAvailability?: string
+  audit?: {
+    createdDate: string
+    updatedDate: string
+  }
   registrant: Record<string, string>
   administrativeContact: Record<string, string>
   technicalContact: Record<string, string>
@@ -356,17 +368,20 @@ export interface SubdomainFinderProResult {
 export interface PortScanResult {
   target: string
   resolved_ip: string
+  scan_protocol: ScanProtocol
   open_ports: number[]
   ports: Array<{
     port: number
-    status: 'open' | 'closed'
+    status: 'open' | 'closed' | 'filtered'
   }>
 }
 
 export type AdvancedScanType = 'quick' | 'full' | 'web' | 'custom'
+export type ScanProtocol = 'tcp' | 'udp'
 
 export interface AdvancedPortResult {
   port: number
+  protocol?: ScanProtocol
   status: 'open' | 'closed' | 'filtered'
   service: string
   banner?: string | null
@@ -380,6 +395,7 @@ export interface AdvancedScanResult {
   target: string
   resolved_ip: string
   scan_type: AdvancedScanType
+  scan_protocol: ScanProtocol
   ports_scanned: number
   open_ports: number
   closed_ports: number

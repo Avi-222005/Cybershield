@@ -3,7 +3,7 @@ import { Search, ScanLine, ShieldAlert, ShieldCheck, AlertTriangle, Server } fro
 import PageWrapper from '../components/ui/PageWrapper'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
 import { advancedScan } from '../lib/api'
-import type { AdvancedScanResult, AdvancedScanType } from '../types'
+import type { AdvancedScanResult, AdvancedScanType, ScanProtocol } from '../types'
 
 const SCAN_OPTIONS: Array<{ value: AdvancedScanType; label: string; helper: string }> = [
   { value: 'quick', label: 'Quick Scan', helper: 'Top common ports' },
@@ -27,6 +27,7 @@ function statusPillClass(status: 'open' | 'closed' | 'filtered') {
 export default function PortScanner() {
   const [target, setTarget] = useState('')
   const [scanType, setScanType] = useState<AdvancedScanType>('quick')
+  const [scanProtocol, setScanProtocol] = useState<ScanProtocol>('tcp')
   const [customRange, setCustomRange] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<AdvancedScanResult | null>(null)
@@ -47,7 +48,7 @@ export default function PortScanner() {
     setResult(null)
 
     try {
-      const scanResult = await advancedScan(trimmedTarget, scanType, customRange.trim())
+      const scanResult = await advancedScan(trimmedTarget, scanType, customRange.trim(), scanProtocol)
       setResult(scanResult)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Advanced scan failed')
@@ -74,7 +75,7 @@ export default function PortScanner() {
         </div>
 
         <form onSubmit={onSubmit} className="glass-card rounded-2xl p-5 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
             <div className="md:col-span-2">
               <label className="block text-xs font-mono text-gray-400 mb-2 uppercase tracking-wider">
                 Target (Domain, IPv4, or IPv6)
@@ -104,6 +105,20 @@ export default function PortScanner() {
                 ))}
               </select>
             </div>
+            <div>
+              <label className="block text-xs font-mono text-gray-400 mb-2 uppercase tracking-wider">
+                Protocol
+              </label>
+              <select
+                value={scanProtocol}
+                onChange={(e) => setScanProtocol(e.target.value as ScanProtocol)}
+                className="cyber-input w-full px-4 py-3 rounded-xl text-sm font-mono"
+                disabled={loading}
+              >
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+              </select>
+            </div>
           </div>
 
           {scanType === 'custom' && (
@@ -123,7 +138,7 @@ export default function PortScanner() {
 
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <p className="text-xs text-gray-500 font-mono">
-              {SCAN_OPTIONS.find((x) => x.value === scanType)?.helper} | Max {1024} ports | Timeout 1s/port
+              {SCAN_OPTIONS.find((x) => x.value === scanType)?.helper} | Protocol {scanProtocol.toUpperCase()} | Max {1024} ports | Timeout 1s/port
             </p>
             <button
               type="submit"
@@ -138,7 +153,7 @@ export default function PortScanner() {
 
         {loading && (
           <div className="glass-card rounded-2xl">
-            <LoadingSpinner label={`Running ${scanType} profile scan...`} />
+            <LoadingSpinner label={`Running ${scanProtocol.toUpperCase()} ${scanType} profile scan...`} />
           </div>
         )}
 
@@ -169,6 +184,10 @@ export default function PortScanner() {
                 <div className="rounded-xl border border-white/10 bg-white/3 p-3">
                   <div className="text-[10px] text-gray-500 uppercase font-mono">Resolved IP</div>
                   <div className="text-sm text-blue-300 font-mono break-all">{result.resolved_ip}</div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/3 p-3">
+                  <div className="text-[10px] text-gray-500 uppercase font-mono">Protocol</div>
+                  <div className="text-sm text-white font-mono">{result.scan_protocol.toUpperCase()}</div>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-white/3 p-3">
                   <div className="text-[10px] text-gray-500 uppercase font-mono">Open Ports</div>

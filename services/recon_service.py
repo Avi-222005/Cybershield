@@ -85,6 +85,18 @@ ADVANCED_SERVICE_MAP = {
     8443: "HTTPS-Alt",
 }
 
+ADVANCED_UDP_SERVICE_MAP = {
+    53: "DNS",
+    67: "DHCP",
+    68: "DHCP",
+    69: "TFTP",
+    123: "NTP",
+    161: "SNMP",
+    500: "ISAKMP",
+}
+
+SUPPORTED_SCAN_PROTOCOLS = {"tcp", "udp"}
+
 RISKY_PORT_ISSUES = {
     21: "Port 21 open -> FTP transmits credentials in plaintext.",
     23: "Port 23 open -> Telnet insecure service exposed.",
@@ -2105,10 +2117,14 @@ def subdomain_finder_pro(target_input: str, scan_mode: str = "standard") -> Dict
     return result
 
 
-def port_scan(target: str) -> Dict:
+def port_scan(target: str, scan_protocol: str = "tcp") -> Dict:
     target = str(target or "").strip()
     if not target:
         return {"error": "IP address or domain is required."}
+
+    scan_protocol = str(scan_protocol or "tcp").strip().lower()
+    if scan_protocol not in SUPPORTED_SCAN_PROTOCOLS:
+        return {"error": "Invalid scan_protocol. Use tcp or udp."}
 
     host = normalize_domain_input(target) or target
 
@@ -2121,49 +2137,77 @@ def port_scan(target: str) -> Dict:
     for port in COMMON_PORTS:
         status = "closed"
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.6)
-                if sock.connect_ex((resolved_ip, port)) == 0:
-                    status = "open"
+            if scan_protocol == "tcp":
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(0.6)
+                    if sock.connect_ex((resolved_ip, port)) == 0:
+                        status = "open"
+            else:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.settimeout(0.8)
+                    try:
+                        sock.sendto(b"\x00", (resolved_ip, port))
+                        sock.recvfrom(512)
+                        status = "open"
+                    except socket.timeout:
+                        status = "filtered"
+                    except OSError as exc:
+                        if getattr(exc, "errno", None) in (110, 60, 10060, 113, 101):
+                            status = "filtered"
+                        else:
+                            status = "closed"
         except Exception:
             status = "closed"
         results.append({"port": port, "status": status})
 
     open_ports = [p["port"] for p in results if p["status"] == "open"]
-    return {"target": target, "resolved_ip": resolved_ip, "ports": results, "open_ports": open_ports}
+    return {
+        "target": target,
+        "resolved_ip": resolved_ip,
+        "scan_protocol": scan_protocol,
+        "ports": results,
+        "open_ports": open_ports,
+    }
 
 
-def service_detection(target: str) -> Dict:
-    scan = port_scan(target)
+def service_detection(target: str, scan_protocol: str = "tcp") -> Dict:
+    scan = port_scan(target, scan_protocol)
     if "error" in scan:
         return scan
 
     resolved_ip = scan["resolved_ip"]
+    scan_protocol = scan.get("scan_protocol", "tcp")
     services = []
 
     for item in scan["ports"]:
         if item["status"] != "open":
             continue
         port = item["port"]
-        service = PORT_SERVICE_MAP.get(port, "Unknown")
+        service = _detect_service_name(port, scan_protocol)
         banner = None
 
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(1.2)
-                sock.connect((resolved_ip, port))
-                if port in (80, 8080):
-                    sock.sendall(f"HEAD / HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n".encode())
-                elif port == 443:
-                    service = "HTTPS"
-                data = sock.recv(256)
-                banner = data.decode(errors="ignore").strip() if data else None
-        except Exception:
-            banner = None
+        if scan_protocol == "tcp":
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(1.2)
+                    sock.connect((resolved_ip, port))
+                    if port in (80, 8080):
+                        sock.sendall(f"HEAD / HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n".encode())
+                    elif port == 443:
+                        service = "HTTPS"
+                    data = sock.recv(256)
+                    banner = data.decode(errors="ignore").strip() if data else None
+            except Exception:
+                banner = None
 
         services.append({"port": port, "service": service, "banner": banner})
 
-    return {"target": target, "resolved_ip": resolved_ip, "services": services}
+    return {
+        "target": target,
+        "resolved_ip": resolved_ip,
+        "scan_protocol": scan_protocol,
+        "services": services,
+    }
 
 
 def header_analysis(url_input: str) -> Dict:
@@ -2746,10 +2790,12 @@ def _ports_for_scan_profile(scan_type: str, custom_range: str = "") -> Tuple[Lis
     return ports, None
 
 
-def _detect_service_name(port: int) -> str:
+def _detect_service_name(port: int, scan_protocol: str = "tcp") -> str:
     try:
-        return socket.getservbyport(port, "tcp").upper()
+        return socket.getservbyport(port, scan_protocol).upper()
     except Exception:
+        if scan_protocol == "udp":
+            return ADVANCED_UDP_SERVICE_MAP.get(port, "Unknown")
         return ADVANCED_SERVICE_MAP.get(port, "Unknown")
 
 
@@ -2810,29 +2856,49 @@ def _extract_service_version(banner: str) -> Tuple[Optional[str], Optional[str]]
     return None, None
 
 
-def _scan_single_port(resolved_ip: str, target_host: str, port: int) -> Dict:
-    service = _detect_service_name(port)
+def _scan_single_port(resolved_ip: str, target_host: str, port: int, scan_protocol: str = "tcp") -> Dict:
+    service = _detect_service_name(port, scan_protocol)
     status = "closed"
     banner = ""
     product = None
     version = None
 
-    try:
-        with socket.create_connection((resolved_ip, port), timeout=SCAN_TIMEOUT_SECONDS) as sock:
-            sock.settimeout(SCAN_TIMEOUT_SECONDS)
-            status = "open"
-            banner = _grab_banner(sock, target_host, port)
-    except socket.timeout:
-        status = "filtered"
-    except ConnectionRefusedError:
-        status = "closed"
-    except OSError as exc:
-        if getattr(exc, "errno", None) in (110, 60, 10060, 113, 101):
+    if scan_protocol == "udp":
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(SCAN_TIMEOUT_SECONDS)
+                sock.sendto(b"\x00", (resolved_ip, port))
+                data, _ = sock.recvfrom(1024)
+                status = "open"
+                banner = _decode_banner(data)
+        except socket.timeout:
+            # UDP no-response is ambiguous and treated as filtered.
             status = "filtered"
-        else:
+        except OSError as exc:
+            err = getattr(exc, "errno", None)
+            if err in (110, 60, 10060, 113, 101):
+                status = "filtered"
+            elif err in (111, 61, 10061, 10054):
+                status = "closed"
+            else:
+                status = "closed"
+    else:
+        try:
+            with socket.create_connection((resolved_ip, port), timeout=SCAN_TIMEOUT_SECONDS) as sock:
+                sock.settimeout(SCAN_TIMEOUT_SECONDS)
+                status = "open"
+                banner = _grab_banner(sock, target_host, port)
+        except socket.timeout:
+            status = "filtered"
+        except ConnectionRefusedError:
             status = "closed"
+        except OSError as exc:
+            if getattr(exc, "errno", None) in (110, 60, 10060, 113, 101):
+                status = "filtered"
+            else:
+                status = "closed"
 
-    if status == "open":
+    if status == "open" and scan_protocol == "tcp":
         detected_product, detected_version = _extract_service_version(banner)
         if detected_product:
             product = detected_product
@@ -2843,6 +2909,7 @@ def _scan_single_port(resolved_ip: str, target_host: str, port: int) -> Dict:
 
     return {
         "port": port,
+        "protocol": scan_protocol,
         "status": status,
         "service": service,
         "banner": banner or None,
@@ -2889,7 +2956,12 @@ def _compute_risk_level(open_results: List[Dict], issues: List[str]) -> str:
     return "LOW"
 
 
-def advanced_network_scan(target_input: str, scan_type: str = "quick", custom_range: str = "") -> Dict:
+def advanced_network_scan(
+    target_input: str,
+    scan_type: str = "quick",
+    custom_range: str = "",
+    scan_protocol: str = "tcp",
+) -> Dict:
     """
     Advanced, web-safe network scanner with scan profiles, service detection,
     banner/version parsing, OS guess, and risk summary.
@@ -2897,6 +2969,10 @@ def advanced_network_scan(target_input: str, scan_type: str = "quick", custom_ra
     resolved = _resolve_advanced_target(target_input)
     if "error" in resolved:
         return resolved
+
+    scan_protocol = str(scan_protocol or "tcp").strip().lower()
+    if scan_protocol not in SUPPORTED_SCAN_PROTOCOLS:
+        return {"error": "Invalid scan_protocol. Use tcp or udp."}
 
     ports, error = _ports_for_scan_profile(scan_type, custom_range)
     if error:
@@ -2910,7 +2986,7 @@ def advanced_network_scan(target_input: str, scan_type: str = "quick", custom_ra
     results: List[Dict] = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_scan_single_port, resolved_ip, target, port) for port in ports]
+        futures = [executor.submit(_scan_single_port, resolved_ip, target, port, scan_protocol) for port in ports]
         for future in as_completed(futures):
             results.append(future.result())
 
@@ -2926,7 +3002,7 @@ def advanced_network_scan(target_input: str, scan_type: str = "quick", custom_ra
 
     duration_ms = int((time.perf_counter() - started) * 1000)
     summary = (
-        f"Scanned {len(ports)} ports on {target}. "
+        f"Scanned {len(ports)} {scan_protocol.upper()} ports on {target}. "
         f"Open: {len(open_results)}, Closed: {closed_count}, Filtered: {filtered_count}. "
         f"Risk: {risk_level}."
     )
@@ -2935,6 +3011,7 @@ def advanced_network_scan(target_input: str, scan_type: str = "quick", custom_ra
         "target": target,
         "resolved_ip": resolved_ip,
         "scan_type": str(scan_type).lower(),
+        "scan_protocol": scan_protocol,
         "ports_scanned": len(ports),
         "open_ports": len(open_results),
         "closed_ports": closed_count,

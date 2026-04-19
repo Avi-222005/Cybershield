@@ -206,6 +206,20 @@ export default function WhoisLookup() {
                   </span>
                 </div>
 
+                {result.lookupSources && result.lookupSources.length > 0 && (
+                  <div className="mb-4 flex flex-wrap gap-2 items-center">
+                    <span className="text-[11px] text-gray-500 font-mono">Sources:</span>
+                    {result.lookupSources.map((source) => (
+                      <span
+                        key={source}
+                        className="text-[11px] font-mono text-[#6ea8fe] bg-[#0d6efd]/10 border border-[#0d6efd]/25 px-2 py-0.5 rounded"
+                      >
+                        {source}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 <div className="grid sm:grid-cols-3 gap-3">
                   <div className="bg-white/3 rounded-lg px-3 py-2.5">
                     <div className="text-xs text-gray-500 font-mono">Domain Age</div>
@@ -220,6 +234,17 @@ export default function WhoisLookup() {
                     <div className="text-sm font-mono text-[#0d6efd] mt-0.5">{result.registrarIANAID || 'N/A'}</div>
                   </div>
                 </div>
+
+                {result.lookupNotes && result.lookupNotes.length > 0 && (
+                  <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/8 p-3">
+                    <div className="text-[11px] text-amber-300 font-mono mb-1">Lookup Notes</div>
+                    <ul className="space-y-1">
+                      {result.lookupNotes.map((note) => (
+                        <li key={note} className="text-xs text-amber-200/90 font-mono">- {note}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
 
               {/* ── Important dates ── */}
@@ -245,20 +270,53 @@ export default function WhoisLookup() {
                 <InfoRow label="Registrar" value={result.registrarName} />
                 <InfoRow label="IANA ID" value={result.registrarIANAID} />
                 <InfoRow label="WHOIS Server" value={result.whoisServer} />
+                <InfoRow label="Registrar URL" value={result.registrarURL} />
+                <InfoRow label="DNSSEC" value={result.dnssec} />
+                <InfoRow label="Privacy" value={result.privacyProtection} />
               </Section>
+
+              {!!result.ips?.length && (
+                <Section title="Domain Infrastructure" icon={Globe} color="text-cyan-400">
+                  <div className="text-xs text-gray-500 font-mono mb-2">Resolved IP Addresses</div>
+                  <div className="flex flex-wrap gap-2">
+                    {result.ips.map((ip) => (
+                      <span
+                        key={ip}
+                        className="text-xs font-mono text-cyan-300 bg-cyan-500/8 border border-cyan-500/20 px-2.5 py-1 rounded-lg"
+                      >
+                        {ip}
+                      </span>
+                    ))}
+                  </div>
+                </Section>
+              )}
 
               {/* ── Name servers ── */}
               {result.nameServers?.length > 0 && (
                 <Section title="Name Servers" icon={Server} color="text-[#3b82f6]">
-                  <div className="flex flex-wrap gap-2">
-                    {result.nameServers.map((ns) => (
-                      <span
-                        key={ns}
-                        className="text-xs font-mono text-purple-300 bg-purple-500/8 border border-purple-500/20 px-2.5 py-1 rounded-lg"
-                      >
-                        {ns}
-                      </span>
-                    ))}
+                  <div className="space-y-2">
+                    {result.nameServers.map((ns) => {
+                      const nsIps = result.nameServerIPs?.[ns] || []
+                      return (
+                        <div key={ns} className="rounded-lg border border-white/10 bg-white/3 p-2.5">
+                          <div className="text-xs font-mono text-purple-300 break-all">{ns}</div>
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {nsIps.length > 0 ? (
+                              nsIps.map((ip) => (
+                                <span
+                                  key={`${ns}-${ip}`}
+                                  className="text-[11px] font-mono text-blue-200 bg-blue-500/10 border border-blue-500/25 px-2 py-0.5 rounded"
+                                >
+                                  {ip}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-[11px] text-gray-500 font-mono">IP not resolved</span>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </Section>
               )}

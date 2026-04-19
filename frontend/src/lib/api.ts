@@ -10,6 +10,7 @@ import type {
   SubdomainScanMode,
   PortScanResult,
   AdvancedScanResult,
+  ScanProtocol,
   HeaderAnalysisResult,
   TechStackResult,
   EmailAnalyzerResult,
@@ -90,14 +91,23 @@ export const subdomainScan = (domain: string) =>
 export const subdomainFinderPro = (target: string, scan_mode: SubdomainScanMode = 'standard') =>
   post<SubdomainFinderProResult>('/subdomain-finder-pro', { target, scan_mode })
 
-export const portScan = (target: string) =>
-  post<PortScanResult>('/port-scan', { target })
+export const portScan = (target: string, scan_protocol: ScanProtocol = 'tcp') =>
+  post<PortScanResult>('/port-scan', { target, scan_protocol })
 
-export const serviceDetect = (target: string) =>
-  post<{ target: string; resolved_ip: string; services: Array<{ port: number; service: string; banner?: string | null }> }>('/service-detect', { target })
+export const serviceDetect = (target: string, scan_protocol: ScanProtocol = 'tcp') =>
+  post<{
+    target: string
+    resolved_ip: string
+    scan_protocol: ScanProtocol
+    services: Array<{ port: number; service: string; banner?: string | null }>
+  }>('/service-detect', { target, scan_protocol })
 
-export const advancedScan = (target: string, scan_type: 'quick' | 'full' | 'web' | 'custom', custom_range = '') =>
-  post<AdvancedScanResult>('/advanced-scan', { target, scan_type, custom_range })
+export const advancedScan = (
+  target: string,
+  scan_type: 'quick' | 'full' | 'web' | 'custom',
+  custom_range = '',
+  scan_protocol: ScanProtocol = 'tcp',
+) => post<AdvancedScanResult>('/advanced-scan', { target, scan_type, custom_range, scan_protocol })
 
 export const headerAnalysis = (url: string) =>
   post<HeaderAnalysisResult>('/http-header-audit', { target: url })
