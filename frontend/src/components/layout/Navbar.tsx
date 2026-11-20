@@ -23,6 +23,8 @@ import {
   FileJson2,
   FileDigit,
   QrCode,
+  ShieldAlert,
+  Activity,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { cn } from '../../lib/utils'
@@ -38,6 +40,7 @@ const threatItems: NavItem[] = [
 ]
 
 const reconItems: NavItem[] = [
+  { to: '/exposure-intelligence', label: 'Exposure Intelligence', icon: ShieldAlert },
   { to: '/unified-recon', label: 'Unified Recon Scanner', icon: Radar },
   { to: '/tech-stack-analyzer', label: 'Tech Stack Analyzer', icon: Brain },
   { to: '/dns-lookup', label: 'DNS Lookup', icon: Network },
@@ -185,6 +188,30 @@ export default function Navbar() {
           >
             Home
           </Link>
+          <Link
+            to="/exposure-intelligence"
+            className={cn(
+              'px-3 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-1.5',
+              pathname === '/exposure-intelligence'
+                ? 'text-cyan-300 bg-cyan-500/15 border border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.2)]'
+                : 'text-gray-300 hover:text-white hover:bg-white/5',
+            )}
+          >
+            <ShieldAlert size={14} className="text-cyan-400" />
+            <span>Exposure Intel</span>
+          </Link>
+          <Link
+            to="/network-monitor"
+            className={cn(
+              'px-3 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-1.5',
+              pathname.startsWith('/network-monitor')
+                ? 'text-[#0d6efd] bg-[#0d6efd]/15 border border-[#0d6efd]/30 shadow-[0_0_12px_rgba(13,110,253,0.2)]'
+                : 'text-gray-300 hover:text-white hover:bg-white/5',
+            )}
+          >
+            <Activity size={14} className="text-[#0d6efd]" />
+            <span>Network Monitor</span>
+          </Link>
           <Dropdown
             label="Threat Analysis"
             items={threatItems}
@@ -243,6 +270,30 @@ export default function Navbar() {
                 )}
               >
                 Home
+              </Link>
+              <Link
+                to="/exposure-intelligence"
+                className={cn(
+                  'px-3 py-2 rounded-lg text-sm font-semibold flex items-center gap-2',
+                  pathname === '/exposure-intelligence'
+                    ? 'text-cyan-300 bg-cyan-500/15 border border-cyan-500/30'
+                    : 'text-gray-300 hover:bg-white/5',
+                )}
+              >
+                <ShieldAlert size={15} className="text-cyan-400" />
+                <span>Exposure Intelligence</span>
+              </Link>
+              <Link
+                to="/network-monitor"
+                className={cn(
+                  'px-3 py-2 rounded-lg text-sm font-semibold flex items-center gap-2',
+                  pathname.startsWith('/network-monitor')
+                    ? 'text-[#0d6efd] bg-[#0d6efd]/15 border border-[#0d6efd]/30'
+                    : 'text-gray-300 hover:bg-white/5',
+                )}
+              >
+                <Activity size={15} className="text-[#0d6efd]" />
+                <span>Network Monitor</span>
               </Link>
 
               <button

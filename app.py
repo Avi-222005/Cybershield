@@ -13,6 +13,8 @@ import html
 from io import BytesIO
 import threading
 import time
+import json
+import uuid
 
 try:
     from reportlab.lib import colors
@@ -102,6 +104,17 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
+from services.exposure_engine import (
+    run_exposure_assessment,
+    start_exposure_assessment_job,
+    get_exposure_assessment_job,
+)
+from services.exposure_engine.attack_graph import AttackSurfaceGraphBuilder
+from services.exposure_engine.change_detection import ChangeDetectionEngine
+from services.network_monitor_api import network_monitor_bp
+
+app.register_blueprint(network_monitor_bp)
+
 # Database Models
 class ScanResult(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -109,6 +122,70 @@ class ScanResult(db.Model):
     target = db.Column(db.String(255), nullable=False)
     result = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class ExposureSnapshot(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(64), unique=True, index=True)
+    target = db.Column(db.String(255), nullable=False, index=True)
+    scan_mode = db.Column(db.String(32), default='standard')
+    exposure_score = db.Column(db.Integer, default=0)
+    grade = db.Column(db.String(10), default='A')
+    risk_level = db.Column(db.String(32), default='LOW')
+    summary = db.Column(db.Text)
+    assets_count = db.Column(db.Integer, default=0)
+    vulnerabilities_count = db.Column(db.Integer, default=0)
+    kev_count = db.Column(db.Integer, default=0)
+    payload_json = db.Column(db.Text)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+def _get_latest_exposure_snapshot(target: str):
+    try:
+        clean_target = target.strip().lower()
+        return ExposureSnapshot.query.filter_by(target=clean_target).order_by(ExposureSnapshot.timestamp.desc()).first()
+    except Exception:
+        return None
+
+
+def _save_exposure_snapshot(result: dict):
+    if not isinstance(result, dict):
+        return
+    try:
+        scan_id = str(result.get('scan_id') or uuid.uuid4().hex)
+        target = str(result.get('target', '')).strip().lower()
+        if not target:
+            return
+        if ExposureSnapshot.query.filter_by(scan_id=scan_id).first():
+            return
+        summary_val = result.get('summary')
+        if isinstance(summary_val, dict):
+            summary_text = summary_val.get('narrative', '')
+        else:
+            summary_text = str(summary_val or '')
+
+        assets = result.get('assets', [])
+        vuln_count = len([v for a in assets for v in a.get('vulnerabilities', [])])
+        kev_count = len([v for a in assets for v in a.get('vulnerabilities', []) if v.get('kev')])
+
+        snapshot = ExposureSnapshot(
+            scan_id=scan_id,
+            target=target,
+            scan_mode=result.get('scan_mode', 'standard'),
+            exposure_score=int(result.get('exposure_score', 0)),
+            grade=str(result.get('grade', 'A')),
+            risk_level=str(result.get('risk_level', 'LOW')),
+            summary=summary_text,
+            assets_count=len(assets),
+            vulnerabilities_count=vuln_count,
+            kev_count=kev_count,
+            payload_json=json.dumps(result),
+            timestamp=datetime.utcnow()
+        )
+        db.session.add(snapshot)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
 
 
 with app.app_context():
@@ -940,6 +1017,294 @@ def api_unified_recon_status(job_id):
         if 'error' in result:
             return jsonify(result), 404
         return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# CYBERSHIELD EXPOSURE INTELLIGENCE ENGINE ENDPOINTS
+# ============================================================
+
+@app.route('/api/exposure/scan', methods=['POST'])
+def api_exposure_scan():
+    try:
+        data = request.get_json() or {}
+        target = data.get('target') or data.get('domain') or data.get('url')
+        scan_mode = data.get('scan_mode', 'standard')
+
+        if not target:
+            return jsonify({'error': 'Target is required.'}), 400
+
+        # Retrieve previous snapshot for drift / change detection
+        prev_snapshot_obj = _get_latest_exposure_snapshot(target)
+        prev_snapshot_data = None
+        if prev_snapshot_obj and prev_snapshot_obj.payload_json:
+            try:
+                prev_snapshot_data = json.loads(prev_snapshot_obj.payload_json)
+            except Exception:
+                pass
+
+        result = run_exposure_assessment(target, scan_mode=scan_mode, previous_snapshot=prev_snapshot_data)
+        if 'error' in result:
+            return jsonify(result), 400
+
+        # Persist scan snapshot in database
+        _save_exposure_snapshot(result)
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/exposure/start', methods=['POST'])
+def api_exposure_start():
+    try:
+        data = request.get_json() or {}
+        target = data.get('target') or data.get('domain') or data.get('url')
+        scan_mode = data.get('scan_mode', 'standard')
+
+        if not target:
+            return jsonify({'error': 'Target is required.'}), 400
+
+        prev_snapshot_obj = _get_latest_exposure_snapshot(target)
+        prev_snapshot_data = None
+        if prev_snapshot_obj and prev_snapshot_obj.payload_json:
+            try:
+                prev_snapshot_data = json.loads(prev_snapshot_obj.payload_json)
+            except Exception:
+                pass
+
+        result = start_exposure_assessment_job(target, scan_mode=scan_mode, previous_snapshot=prev_snapshot_data)
+        if 'error' in result:
+            return jsonify(result), 400
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/exposure/status/<job_id>', methods=['GET'])
+def api_exposure_status(job_id):
+    try:
+        result = get_exposure_assessment_job(job_id)
+        if 'error' in result:
+            return jsonify(result), 404
+
+        # If completed and result present, ensure snapshot is saved
+        if result.get('status') == 'completed' and isinstance(result.get('result'), dict):
+            _save_exposure_snapshot(result['result'])
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/exposure/graph', methods=['POST'])
+def api_exposure_graph():
+    try:
+        data = request.get_json() or {}
+        target = data.get('target') or data.get('domain') or data.get('url')
+        result_payload = data.get('result')
+
+        if result_payload and isinstance(result_payload, dict):
+            graph = result_payload.get('graph')
+            if graph:
+                return jsonify(graph)
+
+        if not target:
+            return jsonify({'error': 'Target or result payload is required.'}), 400
+
+        snapshot = _get_latest_exposure_snapshot(target)
+        if snapshot and snapshot.payload_json:
+            try:
+                parsed = json.loads(snapshot.payload_json)
+                if parsed.get('graph'):
+                    return jsonify(parsed['graph'])
+            except Exception:
+                pass
+
+        assessment = run_exposure_assessment(target, scan_mode='quick')
+        if 'error' in assessment:
+            return jsonify(assessment), 400
+        _save_exposure_snapshot(assessment)
+        return jsonify(assessment.get('graph', {}))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/exposure/assets/<target>', methods=['GET'])
+def api_exposure_assets(target):
+    try:
+        snapshot = _get_latest_exposure_snapshot(target)
+        if snapshot and snapshot.payload_json:
+            parsed = json.loads(snapshot.payload_json)
+            return jsonify({
+                'target': target,
+                'scan_id': snapshot.scan_id,
+                'timestamp': snapshot.timestamp.isoformat(),
+                'assets': parsed.get('assets', []),
+            })
+
+        assessment = run_exposure_assessment(target, scan_mode='quick')
+        if 'error' in assessment:
+            return jsonify(assessment), 400
+        _save_exposure_snapshot(assessment)
+        return jsonify({
+            'target': target,
+            'scan_id': assessment.get('scan_id'),
+            'timestamp': assessment.get('generated_at'),
+            'assets': assessment.get('assets', []),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/exposure/history/<target>', methods=['GET'])
+def api_exposure_history(target):
+    try:
+        clean_target = target.strip().lower()
+        snapshots = ExposureSnapshot.query.filter_by(target=clean_target).order_by(ExposureSnapshot.timestamp.desc()).limit(20).all()
+        history = [
+            {
+                'id': s.id,
+                'scan_id': s.scan_id,
+                'target': s.target,
+                'scan_mode': s.scan_mode,
+                'exposure_score': s.exposure_score,
+                'grade': s.grade,
+                'risk_level': s.risk_level,
+                'summary': s.summary,
+                'assets_count': s.assets_count,
+                'vulnerabilities_count': s.vulnerabilities_count,
+                'kev_count': s.kev_count,
+                'timestamp': s.timestamp.isoformat(),
+            }
+            for s in snapshots
+        ]
+        return jsonify({
+            'target': clean_target,
+            'total_scans': len(history),
+            'history': history,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/exposure/compare', methods=['POST'])
+def api_exposure_compare():
+    try:
+        data = request.get_json() or {}
+        target = data.get('target') or data.get('domain')
+        current_scan_id = data.get('current_scan_id')
+        previous_scan_id = data.get('previous_scan_id')
+
+        if not target:
+            return jsonify({'error': 'Target is required.'}), 400
+
+        clean_target = target.strip().lower()
+
+        if current_scan_id and previous_scan_id:
+            curr_obj = ExposureSnapshot.query.filter_by(scan_id=current_scan_id).first()
+            prev_obj = ExposureSnapshot.query.filter_by(scan_id=previous_scan_id).first()
+        else:
+            recent = ExposureSnapshot.query.filter_by(target=clean_target).order_by(ExposureSnapshot.timestamp.desc()).limit(2).all()
+            if len(recent) < 2:
+                return jsonify({
+                    'target': clean_target,
+                    'has_previous_scan': False,
+                    'has_changes': False,
+                    'message': 'At least two scan snapshots are required for historical comparison.',
+                }), 200
+            curr_obj, prev_obj = recent[0], recent[1]
+
+        if not curr_obj or not curr_obj.payload_json or not prev_obj or not prev_obj.payload_json:
+            return jsonify({'error': 'One or both scan snapshots could not be found or loaded.'}), 404
+
+        curr_data = json.loads(curr_obj.payload_json)
+        prev_data = json.loads(prev_obj.payload_json)
+
+        from services.exposure_engine.asset_model import NormalizedAsset, TechObservation, VulnerabilityFinding, ExposureFinding
+        assets = []
+        for a_dict in curr_data.get('assets', []):
+            asset = NormalizedAsset(
+                asset_id=a_dict.get('asset_id', ''),
+                hostname=a_dict.get('hostname', ''),
+                root_domain=a_dict.get('root_domain', ''),
+                ip_addresses=a_dict.get('ip_addresses', []),
+                ports=a_dict.get('ports', []),
+                technologies=[
+                    TechObservation(name=t.get('name', ''), normalized_name=t.get('normalized_name', ''), version=t.get('version', ''))
+                    for t in a_dict.get('technologies', [])
+                ],
+                vulnerabilities=[
+                    VulnerabilityFinding(cve_id=v.get('cve_id', ''), technology=v.get('technology', ''), detected_version=v.get('detected_version', ''), affected=v.get('affected', False), status=v.get('status', 'POTENTIAL'))
+                    for v in a_dict.get('vulnerabilities', [])
+                ],
+                exposures=[
+                    ExposureFinding(finding_id=e.get('finding_id', ''), type=e.get('type', ''), title=e.get('title', ''), asset=e.get('asset', ''), severity=e.get('severity', 'LOW'), priority=e.get('priority', 'LOW'), confidence=e.get('confidence', 80), status=e.get('status', 'CONFIRMED'), reason=e.get('reason', ''), cve_id=e.get('cve_id'))
+                    for e in a_dict.get('exposures', [])
+                ]
+            )
+            assets.append(asset)
+
+        change_engine = ChangeDetectionEngine()
+        diff = change_engine.compare_snapshots(
+            target=clean_target,
+            current_assets=assets,
+            current_score=curr_data.get('exposure_score', 0),
+            previous_data=prev_data,
+        )
+        return jsonify(diff)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/exposure/vulnerabilities/<target>', methods=['GET'])
+def api_exposure_vulnerabilities(target):
+    try:
+        snapshot = _get_latest_exposure_snapshot(target)
+        if snapshot and snapshot.payload_json:
+            parsed = json.loads(snapshot.payload_json)
+            vulns = [v for a in parsed.get('assets', []) for v in a.get('vulnerabilities', [])]
+            return jsonify({
+                'target': target,
+                'count': len(vulns),
+                'vulnerabilities': vulns,
+            })
+
+        assessment = run_exposure_assessment(target, scan_mode='quick')
+        if 'error' in assessment:
+            return jsonify(assessment), 400
+        _save_exposure_snapshot(assessment)
+        vulns = [v for a in assessment.get('assets', []) for v in a.get('vulnerabilities', [])]
+        return jsonify({
+            'target': target,
+            'count': len(vulns),
+            'vulnerabilities': vulns,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/exposure/remediation/<target>', methods=['GET'])
+def api_exposure_remediation(target):
+    try:
+        snapshot = _get_latest_exposure_snapshot(target)
+        if snapshot and snapshot.payload_json:
+            parsed = json.loads(snapshot.payload_json)
+            return jsonify({
+                'target': target,
+                'remediation_plan': parsed.get('remediation_plan', []),
+            })
+
+        assessment = run_exposure_assessment(target, scan_mode='quick')
+        if 'error' in assessment:
+            return jsonify(assessment), 400
+        _save_exposure_snapshot(assessment)
+        return jsonify({
+            'target': target,
+            'remediation_plan': assessment.get('remediation_plan', []),
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

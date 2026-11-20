@@ -19,6 +19,14 @@ import HTTPHeaderAnalyzer from './pages/HTTPHeaderAnalyzer'
 import TechStackAnalyzer from './pages/TechStackAnalyzer'
 import EmailHeaderAnalyzer from './pages/EmailHeaderAnalyzer'
 import UnifiedReconScanner from './pages/UnifiedReconScanner'
+import ExposureIntelligence from './pages/ExposureIntelligence'
+import NetworkMonitorLayout from './pages/network-monitor/NetworkMonitorLayout'
+import NetworkOverview from './pages/network-monitor/NetworkOverview'
+import Connections from './pages/network-monitor/Connections'
+import Protocols from './pages/network-monitor/Protocols'
+import Alerts from './pages/network-monitor/Alerts'
+import Analytics from './pages/network-monitor/Analytics'
+import Settings from './pages/network-monitor/Settings'
 
 const HashGeneratorTool = lazy(() => import('./pages/tools/HashGeneratorTool'))
 const PasswordGeneratorTool = lazy(() => import('./pages/tools/PasswordGeneratorTool'))
@@ -68,6 +76,15 @@ function App() {
                   <Route path="/email-header-analyzer" element={<EmailHeaderAnalyzer />} />
                   <Route path="/tech-stack-analyzer" element={<TechStackAnalyzer />} />
                   <Route path="/unified-recon" element={<UnifiedReconScanner />} />
+                  <Route path="/exposure-intelligence" element={<ExposureIntelligence />} />
+                  <Route path="/network-monitor" element={<NetworkMonitorLayout />}>
+                    <Route index element={<NetworkOverview />} />
+                    <Route path="connections" element={<Connections />} />
+                    <Route path="protocols" element={<Protocols />} />
+                    <Route path="alerts" element={<Alerts />} />
+                    <Route path="analytics" element={<Analytics />} />
+                    <Route path="settings" element={<Settings />} />
+                  </Route>
                   <Route path="/tools/hash-generator" element={<LazyPage><HashGeneratorTool /></LazyPage>} />
                   <Route path="/tools/password-generator" element={<LazyPage><PasswordGeneratorTool /></LazyPage>} />
                   <Route path="/tools/base64" element={<LazyPage><Base64Tool /></LazyPage>} />

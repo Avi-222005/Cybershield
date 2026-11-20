@@ -721,3 +721,265 @@ export interface UnifiedReconResult {
   cached: boolean
   generated_at: string
 }
+
+// ============================================================
+// CYBERSHIELD EXPOSURE INTELLIGENCE ENGINE TYPES
+// ============================================================
+
+export type ExposureScanMode = 'quick' | 'standard' | 'deep'
+export type ExposureSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO'
+export type ExposurePriority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFORMATIONAL'
+export type ExposureFindingStatus = 'CONFIRMED' | 'LIKELY' | 'POTENTIAL' | 'INFORMATIONAL'
+export type AssetCriticality = 'unknown' | 'informational' | 'low' | 'medium' | 'high' | 'critical'
+
+export interface ExposureCategoryScore {
+  score: number
+  max: number
+  evidence: string[]
+}
+
+export interface ExposureScoreBreakdown {
+  internet_exposure: ExposureCategoryScore
+  vulnerability: ExposureCategoryScore
+  exploitability: ExposureCategoryScore
+  configuration: ExposureCategoryScore
+  asset_context: ExposureCategoryScore
+}
+
+export interface ExposureFinding {
+  finding_id: string
+  type: string
+  title: string
+  asset: string
+  severity: ExposureSeverity
+  priority: ExposurePriority
+  confidence: number
+  status: ExposureFindingStatus
+  reason: string
+  evidence: string[]
+  cve_id?: string | null
+  remediation: string
+  category: string
+}
+
+export interface VulnerabilityFinding {
+  cve_id: string
+  technology: string
+  detected_version: string
+  affected: boolean
+  status: ExposureFindingStatus
+  cvss: number
+  cvss_severity: string
+  epss: number
+  epss_percentile: number
+  kev: boolean
+  kev_date_added?: string | null
+  summary: string
+  affected_version_range: string
+  evidence: string[]
+  source: string
+  remediation: string
+  published_date?: string | null
+}
+
+export interface NormalizedTechObservation {
+  name: string
+  normalized_name: string
+  version: string
+  confidence: number
+  categories: string[]
+  website?: string | null
+  section: string
+  evidence: string[]
+}
+
+export interface NormalizedServiceObservation {
+  port: number
+  protocol: string
+  service: string
+  banner: string
+  version: string
+  is_tls: boolean
+  risk_level: string
+  evidence: string[]
+}
+
+export interface NormalizedAsset {
+  asset_id: string
+  hostname: string
+  root_domain: string
+  ip_addresses: string[]
+  ipv6_addresses: string[]
+  ports: number[]
+  services: NormalizedServiceObservation[]
+  technologies: NormalizedTechObservation[]
+  ssl: Record<string, any>
+  dns: Record<string, any>
+  http: Record<string, any>
+  headers: Record<string, any>
+  email_security: Record<string, any>
+  whois: Record<string, any>
+  subdomain_sources: string[]
+  is_live: boolean
+  first_seen: string
+  last_seen: string
+  asset_criticality: AssetCriticality
+  criticality_reason: string
+  criticality_inferred: boolean
+  exposures: ExposureFinding[]
+  vulnerabilities: VulnerabilityFinding[]
+  risk_score: number
+  risk_breakdown?: Record<string, any>
+}
+
+export interface AttackGraphNode {
+  id: string
+  label: string
+  type: 'Internet' | 'Domain' | 'Subdomain' | 'IP' | 'Port' | 'Service' | 'Technology' | 'Certificate' | 'CVE'
+  severity: string
+  data: Record<string, any>
+}
+
+export interface AttackGraphEdge {
+  id: string
+  source: string
+  target: string
+  label: string
+}
+
+export interface PotentialExposurePathStep {
+  step: number
+  title: string
+  detail: string
+}
+
+export interface PotentialExposurePath {
+  path_id: string
+  title: string
+  severity: string
+  target_asset: string
+  cve_id?: string
+  kev?: boolean
+  epss?: number
+  steps: PotentialExposurePathStep[]
+  risk_summary: string
+}
+
+export interface AttackSurfaceGraph {
+  nodes: AttackGraphNode[]
+  edges: AttackGraphEdge[]
+  paths: PotentialExposurePath[]
+  metrics: {
+    total_nodes: number
+    total_edges: number
+    potential_exposure_paths: number
+  }
+}
+
+export interface ExposureChangeDetection {
+  target: string
+  has_previous_scan: boolean
+  has_changes: boolean
+  score_delta: number
+  current_score: number
+  previous_score?: number | null
+  new_subdomains: string[]
+  removed_subdomains: string[]
+  new_ips: string[]
+  removed_ips: string[]
+  new_ports: Array<{ host: string; port: number }>
+  closed_ports: Array<{ host: string; port: number }>
+  new_technologies: Array<{ host: string; technology: string; version: string }>
+  changed_technologies: Array<{ host: string; technology: string; previous_version: string; current_version: string }>
+  new_vulnerabilities: Array<{ host: string; cve_id: string }>
+  resolved_vulnerabilities: Array<{ host: string; cve_id: string }>
+  new_exposures: string[]
+  resolved_exposures: string[]
+  summary: string
+}
+
+export interface RemediationItem {
+  step_number: number
+  finding_id: string
+  title: string
+  priority: ExposurePriority
+  priority_label: string
+  severity: ExposureSeverity
+  category: string
+  effort: 'Low' | 'Medium' | 'High'
+  reason: string
+  remediation_summary: string
+  steps: string[]
+  verification: string
+  affected_assets: string[]
+}
+
+export interface ExposureExecutiveSummary {
+  target: string
+  generated_at: string
+  scan_mode: string
+  metrics: {
+    total_assets: number
+    live_hosts: number
+    open_services: number
+    technologies_count: number
+    known_cves_count: number
+    kev_cves_count: number
+    high_priority_exposures: number
+    exposure_score: number
+    grade: string
+    risk_level: string
+  }
+  narrative: string
+  top_findings: ExposureFinding[]
+  top_remediations: RemediationItem[]
+  source_status: Record<string, string>
+}
+
+export interface ExposureAssessmentResult {
+  target: string
+  scan_id: string
+  scan_mode: ExposureScanMode
+  generated_at: string
+  scan_duration_ms: number
+  exposure_score: number
+  grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'F'
+  grade_label: string
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+  score_breakdown: ExposureScoreBreakdown
+  summary: ExposureExecutiveSummary
+  assets: NormalizedAsset[]
+  exposures: ExposureFinding[]
+  graph: AttackSurfaceGraph
+  potential_exposure_paths: PotentialExposurePath[]
+  change_detection: ExposureChangeDetection
+  remediation_plan: RemediationItem[]
+  source_status: Record<string, string>
+}
+
+export interface ExposureJobStatus {
+  job_id: string
+  target: string
+  scan_mode?: ExposureScanMode
+  status: 'running' | 'completed' | 'failed'
+  progress: number
+  status_message?: string
+  result?: ExposureAssessmentResult
+  error?: string
+}
+
+export interface ExposureHistoryItem {
+  id: number
+  scan_id: string
+  target: string
+  scan_mode: string
+  exposure_score: number
+  grade: string
+  risk_level: string
+  summary: string
+  assets_count: number
+  vulnerabilities_count: number
+  kev_count: number
+  timestamp: string
+}
+

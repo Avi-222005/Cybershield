@@ -11,10 +11,20 @@ import {
   Cpu,
   Database,
   Radar,
+  ShieldAlert,
 } from 'lucide-react'
 import PageWrapper from '../components/ui/PageWrapper'
 
 const features = [
+  {
+    icon: ShieldAlert,
+    title: 'Exposure Intelligence Engine',
+    description:
+      'External Attack Surface Management (EASM): Asset inventory, multi-source exposure correlation, CISA KEV & EPSS intelligence, attack surface graph, and explainable perimeter scoring.',
+    href: '/exposure-intelligence',
+    accentColor: '#38bdf8',
+    tags: ['EASM Platform', 'Attack Graph', 'CISA KEV', 'EPSS Intel'],
+  },
   {
     icon: Radar,
     title: 'Unified Recon Scanner',
@@ -124,15 +134,23 @@ export default function Home() {
             className="flex flex-wrap justify-center gap-3 mb-16"
           >
             <Link
+              to="/exposure-intelligence"
+              className="group flex items-center gap-2 px-7 py-3.5 bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 !text-white font-semibold rounded-xl transition-all duration-200 text-sm shadow-lg shadow-cyan-500/25 border border-cyan-400/30"
+            >
+              <ShieldAlert size={16} className="text-cyan-300" />
+              <span>Exposure Intelligence</span>
+              <ChevronRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
+            </Link>
+            <Link
               to="/phishing-checker"
-              className="group flex items-center gap-2 px-7 py-3.5 bg-[#0d6efd] hover:bg-[#0b5ed7] !text-white font-semibold rounded-xl transition-all duration-200 text-sm shadow-lg shadow-[#0d6efd]/25"
+              className="group flex items-center gap-2 px-7 py-3.5 bg-white/10 hover:bg-white/15 !text-white font-semibold rounded-xl transition-all duration-200 text-sm border border-white/15"
             >
               Analyze a URL
               <ChevronRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
             </Link>
             <Link
               to="/ip-checker"
-              className="flex items-center gap-2 px-7 py-3.5 border border-white/15 hover:border-[#0d6efd]/40 text-gray-300 hover:text-white rounded-xl transition-all duration-200 text-sm"
+              className="flex items-center gap-2 px-7 py-3.5 border border-white/15 hover:border-cyan-400/40 text-gray-300 hover:text-white rounded-xl transition-all duration-200 text-sm"
             >
               Check IP Reputation
             </Link>

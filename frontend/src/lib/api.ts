@@ -18,6 +18,15 @@ import type {
   UnifiedReconJobStatus,
   UnifiedReconResult,
   UnifiedReconScanMode,
+  ExposureAssessmentResult,
+  ExposureJobStatus,
+  ExposureScanMode,
+  AttackSurfaceGraph,
+  ExposureChangeDetection,
+  NormalizedAsset,
+  VulnerabilityFinding,
+  RemediationItem,
+  ExposureHistoryItem,
 } from '../types'
 
 // Use environment variable for API base URL, fall back to relative path
@@ -155,3 +164,51 @@ export async function downloadUnifiedReconPdf(payload: {
 
   return res.blob()
 }
+
+// ============================================================
+// EXPOSURE INTELLIGENCE API CLIENT
+// ============================================================
+
+export const scanExposure = (target: string, scan_mode: ExposureScanMode = 'standard') =>
+  post<ExposureAssessmentResult>('/exposure/scan', { target, scan_mode })
+
+export const startExposureJob = (target: string, scan_mode: ExposureScanMode = 'standard') =>
+  post<ExposureJobStatus>('/exposure/start', { target, scan_mode })
+
+export const getExposureJobStatus = (job_id: string) =>
+  get<ExposureJobStatus>(`/exposure/status/${encodeURIComponent(job_id)}`)
+
+export const getExposureGraph = (target?: string, result?: any) =>
+  post<AttackSurfaceGraph>('/exposure/graph', { target, result })
+
+export const getExposureAssets = (target: string) =>
+  get<{ target: string; scan_id: string; timestamp: string; assets: NormalizedAsset[] }>(
+    `/exposure/assets/${encodeURIComponent(target)}`,
+  )
+
+export const getExposureHistory = (target: string) =>
+  get<{ target: string; total_scans: number; history: ExposureHistoryItem[] }>(
+    `/exposure/history/${encodeURIComponent(target)}`,
+  )
+
+export const compareExposureScans = (
+  target: string,
+  current_scan_id?: string,
+  previous_scan_id?: string,
+) =>
+  post<ExposureChangeDetection>('/exposure/compare', {
+    target,
+    current_scan_id,
+    previous_scan_id,
+  })
+
+export const getExposureVulnerabilities = (target: string) =>
+  get<{ target: string; count: number; vulnerabilities: VulnerabilityFinding[] }>(
+    `/exposure/vulnerabilities/${encodeURIComponent(target)}`,
+  )
+
+export const getExposureRemediation = (target: string) =>
+  get<{ target: string; remediation_plan: RemediationItem[] }>(
+    `/exposure/remediation/${encodeURIComponent(target)}`,
+  )
+
